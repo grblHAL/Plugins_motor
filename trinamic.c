@@ -292,23 +292,23 @@ static void trinamic_settings_restore (void)
 
 #ifdef A_AXIS
             case A_AXIS:
-                trinamic.driver_enable.z = TMA_A_ENABLE;
-                trinamic.driver[idx].current = TMA_A_CURRENT;
+                trinamic.driver_enable.z = TMC_A_ENABLE;
+                trinamic.driver[idx].current = TMC_A_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_A_HOLD_CURRENT_PCT;
-                trinamic.driver[idx].microsteps = TMA_A_MICROSTEPS;
-                trinamic.driver[idx].r_sense = TMA_A_R_SENSE;
-                trinamic.driver[idx].homing_sensitivity = TMA_A_SGT;
+                trinamic.driver[idx].microsteps = TMC_A_MICROSTEPS;
+                trinamic.driver[idx].r_sense = TMC_A_R_SENSE;
+                trinamic.driver[idx].homing_sensitivity = TMC_A_SGT;
                 break;
 #endif
 
 #ifdef B_AXIS
             case B_AXIS:
-                trinamic.driver_enable.z = TMB_B_ENABLE;
-                trinamic.driver[idx].current = TMB_B_CURRENT;
+                trinamic.driver_enable.z = TMC_B_ENABLE;
+                trinamic.driver[idx].current = TMB_C_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_B_HOLD_CURRENT_PCT;
-                trinamic.driver[idx].microsteps = TMB_B_MICROSTEPS;
-                trinamic.driver[idx].r_sense = TMB_B_R_SENSE;
-                trinamic.driver[idx].homing_sensitivity = TMB_B_SGT;
+                trinamic.driver[idx].microsteps = TMC_B_MICROSTEPS;
+                trinamic.driver[idx].r_sense = TMB_C_R_SENSE;
+                trinamic.driver[idx].homing_sensitivity = TMB_C_SGT;
                 break;
 #endif
 
