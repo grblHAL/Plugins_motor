@@ -304,11 +304,11 @@ static void trinamic_settings_restore (void)
 #ifdef B_AXIS
             case B_AXIS:
                 trinamic.driver_enable.z = TMC_B_ENABLE;
-                trinamic.driver[idx].current = TMB_C_CURRENT;
+                trinamic.driver[idx].current = TMC_B_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_B_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_B_MICROSTEPS;
-                trinamic.driver[idx].r_sense = TMB_C_R_SENSE;
-                trinamic.driver[idx].homing_sensitivity = TMB_C_SGT;
+                trinamic.driver[idx].r_sense = TMC_B_R_SENSE;
+                trinamic.driver[idx].homing_sensitivity = TMC_B_SGT;
                 break;
 #endif
 
