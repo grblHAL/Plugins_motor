@@ -961,7 +961,7 @@ static void write_debug_report (uint_fast8_t axes)
         sprintf(sbuf, "%-15s", "Peak current");
         for(idx = 0; idx < N_AXIS; idx++) {
             if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8" UINT32FMT, (uint32_t)((float)debug_report[idx].current * sqrtf(2)));
+                sprintf(append(sbuf), "%8" UINT32SFMT, (uint32_t)((float)debug_report[idx].current * sqrtf(2)));
         }
         write_line(sbuf);
 
@@ -1027,7 +1027,7 @@ static void write_debug_report (uint_fast8_t axes)
         sprintf(sbuf, "%-15s", "tstep");
         for(idx = 0; idx < N_AXIS; idx++) {
             if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8" UINT32FMT, debug_report[idx].tstep);
+                sprintf(append(sbuf), "%8" UINT32SFMT, debug_report[idx].tstep);
         }
         write_line(sbuf);
 
@@ -1036,7 +1036,7 @@ static void write_debug_report (uint_fast8_t axes)
         sprintf(sbuf, "%-15s", "threshold");
         for(idx = 0; idx < N_AXIS; idx++) {
             if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8" UINT32FMT, stepper[idx]->get_tpwmthrs_raw(idx));
+                sprintf(append(sbuf), "%8" UINT32SFMT, stepper[idx]->get_tpwmthrs_raw(idx));
         }
         write_line(sbuf);
 
@@ -1044,7 +1044,7 @@ static void write_debug_report (uint_fast8_t axes)
         for(idx = 0; idx < N_AXIS; idx++) {
             if(bit_istrue(axes, bit(idx))) {
                 if(stepper[idx]->get_tpwmthrs_raw(idx))
-                    sprintf(append(sbuf), "%8" UINT32FMT, stepper[idx]->get_tpwmthrs(idx, settings.axis[idx].steps_per_mm));
+                    sprintf(append(sbuf), "%8" UINT32SFMT, stepper[idx]->get_tpwmthrs(idx, settings.axis[idx].steps_per_mm));
                 else
                     sprintf(append(sbuf), "%8s", "-");
             }
@@ -1213,7 +1213,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.02]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.03]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
