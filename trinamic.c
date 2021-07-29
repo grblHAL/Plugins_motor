@@ -56,7 +56,6 @@ static on_report_options_ptr on_report_options;
 static trinamic_on_drivers_init_ptr on_drivers_init;
 static user_mcode_ptrs_t user_mcode;
 static trinamic_settings_t trinamic;
-static parameter_words_t word;
 static struct {
     bool raw;
     bool sg_status_enable;
@@ -354,7 +353,9 @@ static bool trinamic_driver_config (uint_fast8_t axis)
 {
     bool ok = false;
 
-    #if TRINAMIC_ENABLE == 2130
+    #if TRINAMIC_ENABLE == 2209
+        ok = (stepper[axis] = TMC2209_AddAxis(axis, trinamic.driver[axis].current, trinamic.driver[axis].microsteps, trinamic.driver[axis].r_sense)) != NULL;
+    #elif TRINAMIC_ENABLE == 2130
         ok = (stepper[axis] = TMC2130_AddAxis(axis, trinamic.driver[axis].current, trinamic.driver[axis].microsteps, trinamic.driver[axis].r_sense)) != NULL;
     #elif TRINAMIC_ENABLE == 5160
         ok = (stepper[axis] = TMC5160_AddAxis(axis, trinamic.driver[axis].current, trinamic.driver[axis].microsteps, trinamic.driver[axis].r_sense)) != NULL;
@@ -524,7 +525,7 @@ static void report_sg_params (void)
 
 // Validate M-code axis parameters
 // Sets value to NAN (Not A Number) and returns false if driver not installed
-static bool check_params (parser_block_t *gc_block, parameter_words_t *parameter_words)
+static bool check_params (parser_block_t *gc_block)
 {
     static const parameter_words_t wordmap[] = {
        { .x = On },
@@ -541,11 +542,11 @@ static bool check_params (parser_block_t *gc_block, parameter_words_t *parameter
 
     do {
         idx--;
-        if((*parameter_words).mask & wordmap[idx].mask) {
+        if(gc_block->words.mask & wordmap[idx].mask) {
             n_found++;
             if(bit_istrue(driver_enabled.mask, bit(idx)) && !isnan(gc_block->values.xyz[idx])) {
                 n_ok++;
-                (*parameter_words).mask &= ~wordmap[idx].mask;
+                gc_block->words.mask &= ~wordmap[idx].mask;
             }
         } else
             gc_block->values.xyz[idx] = NAN;
@@ -573,7 +574,7 @@ static user_mcode_t trinamic_MCodeCheck (user_mcode_t mcode)
 }
 
 // Validate driver specific M-code parameters
-static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter_words_t *parameter_words)
+static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter_words_t *deprecated)
 {
     status_code_t state = Status_GcodeValueWordMissing;
 
@@ -601,40 +602,39 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
 
         case Trinamic_DebugReport:
             state = Status_OK;
-            word = *parameter_words;
 
-            if(word.h && gc_block->values.h > 1)
+            if(gc_block->words.h && gc_block->values.h > 1)
                 state = Status_BadNumberFormat;
 
-            if(word.q && isnan(gc_block->values.q))
+            if(gc_block->words.q && isnan(gc_block->values.q))
                 state = Status_BadNumberFormat;
 
-            if(word.s && isnan(gc_block->values.s))
+            if(gc_block->words.s && isnan(gc_block->values.s))
                 state = Status_BadNumberFormat;
 
-            (*parameter_words).h = (*parameter_words).i = (*parameter_words).q = (*parameter_words).s =
-              (*parameter_words).x = (*parameter_words).y = (*parameter_words).z = Off;
+            gc_block->words.h = gc_block->words.i = gc_block->words.q = gc_block->words.s =
+             gc_block->words.x = gc_block->words.y = gc_block->words.z = Off;
 
 #ifdef A_AXIS
-            (*parameter_words).a = Off;
+            gc_block->words.a = Off;
 #endif
 #ifdef B_AXIS
-            (*parameter_words).b = Off;
+            gc_block->words.b = Off;
 #endif
 #ifdef C_AXIS
-            (*parameter_words).c = Off;
+            gc_block->words.c = Off;
 #endif
 //            gc_block->user_mcode_sync = true;
             break;
 
         case Trinamic_StepperCurrent:
-            if(check_params(gc_block, parameter_words)) {
+            if(check_params(gc_block)) {
                 state = Status_OK;
                 gc_block->user_mcode_sync = true;
-                if(!(*parameter_words).q)
+                if(!gc_block->words.q)
                     gc_block->values.q = NAN;
                 else // TODO: add range check?
-                    (*parameter_words).q = Off;
+                    gc_block->words.q = Off;
             }
             break;
 
@@ -644,14 +644,14 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
             break;
 
         case Trinamic_HybridThreshold:
-            if(check_params(gc_block, parameter_words)) {
+            if(check_params(gc_block)) {
                 state = Status_OK;
                 gc_block->user_mcode_sync = true;
             }
             break;
 
         case Trinamic_HomingSensitivity:
-            if(check_params(gc_block, parameter_words)) {
+            if(check_params(gc_block)) {
                 uint_fast8_t idx = N_AXIS;
                 state = Status_OK;
                 do {
@@ -667,7 +667,7 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
             break;
     }
 
-    return state == Status_Unhandled && user_mcode.validate ? user_mcode.validate(gc_block, parameter_words) : state;
+    return state == Status_Unhandled && user_mcode.validate ? user_mcode.validate(gc_block, deprecated) : state;
 }
 
 // Execute driver specific M-code
@@ -694,34 +694,34 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
         case Trinamic_DebugReport:
             {
                 axes_signals_t axes = {0};
-                bool write_report = !(word.i || word.s || word.h || word.q);
+                bool write_report = !(gc_block->words.i || gc_block->words.s || gc_block->words.h || gc_block->words.q);
 
                 if(!write_report) {
 
-                    if(word.i)
+                    if(gc_block->words.i)
                         trinamic_drivers_init();
 
-                    if(word.h)
+                    if(gc_block->words.h)
                         report.sfilt = gc_block->values.h != 0.0f;
 
-                    if(word.q)
+                    if(gc_block->words.q)
                         report.raw = gc_block->values.q != 0.0f;
 
-                    if(word.s)
+                    if(gc_block->words.s)
                         report.sg_status_enable = gc_block->values.s != 0.0f;
                 }
 
-                axes.x = word.x;
-                axes.y = word.y;
-                axes.z = word.z;
+                axes.x = gc_block->words.x;
+                axes.y = gc_block->words.y;
+                axes.z = gc_block->words.z;
     #ifdef A_AXIS
-                axes.a = word.a;
+                axes.a = gc_block->words.a;
     #endif
     #ifdef B_AXIS
-                axes.b = word.b;
+                axes.b = gc_block->words.b;
     #endif
     #ifdef C_AXIS
-                axes.c = word.c;
+                axes.c = gc_block->words.c;
     #endif
                 axes.mask &= driver_enabled.mask;
 
@@ -750,7 +750,8 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                         }
                         stepper[report.sg_status_axis]->stallguard_enable(report.sg_status_axis, report.sg_status_enable, trinamic.driver[report.sg_status_axis].homing_sensitivity);
                         stepper[report.sg_status_axis]->sg_filter(report.sg_status_axis, report.sfilt);
-                        stepper[report.sg_status_axis]->set_thigh_raw(report.sg_status_axis, 0);
+                        if(stepper[report.sg_status_axis]->set_thigh_raw) // TODO: TMC2209 do not have this...
+                            stepper[report.sg_status_axis]->set_thigh_raw(report.sg_status_axis, 0);
                         stepper[report.sg_status_axis]->set_tcoolthrs_raw(report.sg_status_axis, 0xFFFFF);
                     } else if(hal_stepper_pulse_start != NULL) {
                         hal.stepper.pulse_start = hal_stepper_pulse_start;
@@ -759,8 +760,6 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
                 } else
                     write_debug_report(axes.mask ? axes.mask : driver_enabled.mask);
-
-                word.value = 0;
             }
             break;
 
@@ -878,7 +877,8 @@ void trinamic_homing (bool enable)
         if(bit_istrue(driver_enabled.mask, bit(--idx))) {
             stepper[idx]->stallguard_enable(report.sg_status_axis, bit_istrue(homing.mask, bit(idx)), trinamic.driver[idx].homing_sensitivity);
             stepper[idx]->set_tcoolthrs(idx, settings.homing.feed_rate / 60.0f * 1.5f, settings.axis[idx].steps_per_mm);
-            stepper[idx]->set_thigh(idx,  settings.homing.feed_rate / 60.0f * 0.6f, settings.axis[idx].steps_per_mm);
+            if(stepper[idx]->set_thigh) // TODO: TMC2209 do not have this...
+            	stepper[idx]->set_thigh(idx,  settings.homing.feed_rate / 60.0f * 0.6f, settings.axis[idx].steps_per_mm);
         }
     } while(idx);
 
@@ -1213,7 +1213,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.03]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.04]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
