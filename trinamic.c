@@ -28,6 +28,7 @@
 #if TRINAMIC_ENABLE
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -45,14 +46,17 @@
 static bool warning = false, is_homing = false;
 static volatile uint_fast16_t diag1_poll = 0;
 static char sbuf[65]; // string buffer for reports
-//static TMC5160_t stepper[N_AXIS];
-static const tmchal_t *stepper[N_AXIS];
+static uint_fast8_t n_motors = 0;
+static const tmchal_t *stepper[N_TMC_MOTORS];
+static motor_map_t *motor_map;
 static axes_signals_t homing = {0}, otpw_triggered = {0}, driver_enabled = {0};
 static limits_get_state_ptr limits_get_state = NULL;
+static limits_enable_ptr limits_enable = NULL;
 static stepper_pulse_start_ptr hal_stepper_pulse_start = NULL;
 static nvs_address_t nvs_address;
 static on_realtime_report_ptr on_realtime_report;
 static on_report_options_ptr on_report_options;
+static settings_changed_ptr settings_changed;
 static trinamic_on_drivers_init_ptr on_drivers_init;
 static user_mcode_ptrs_t user_mcode;
 static trinamic_settings_t trinamic;
@@ -61,12 +65,15 @@ static struct {
     bool sg_status_enable;
     volatile bool sg_status;
     bool sfilt;
-    uint32_t sg_status_axis;
-    axes_signals_t sg_status_axismask;
+    uint32_t sg_status_motor;
+    axes_signals_t sg_status_motormask;
     uint32_t msteps;
 } report = {0};
 
 #if TRINAMIC_I2C
+
+static stepper_enable_ptr stepper_enable = NULL;
+
 TMCI2C_enable_dgr_t dgr_enable = {
     .addr.value = TMC_I2CReg_ENABLE
 };
@@ -86,7 +93,7 @@ void trinamic_if_init (trinamic_driver_if_t *driver)
 
 #if 1 // Region settings
 
-static void trinamic_drivers_init (void);
+static void trinamic_drivers_init (axes_signals_t axes);
 static void trinamic_settings_load (void);
 static void trinamic_settings_restore (void);
 
@@ -106,7 +113,11 @@ static const setting_detail_t trinamic_settings[] = {
     { Setting_TrinamicHoming, Group_MotorDriver, "Sensorless homing", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCore, &trinamic.homing_enable.mask, NULL, NULL },
     { Setting_AxisStepperCurrent, Group_Axis0, "?-axis motor current", "mA", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL },
     { Setting_AxisMicroSteps, Group_Axis0, "?-axis microsteps", "steps", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL },
+#if TMC_STALLGUARD == 4
+    { Setting_AxisExtended0, Group_Axis0, "?-axis stallGuard value", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
+#else
     { Setting_AxisExtended0, Group_Axis0, "?-axis stallGuard value", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
+#endif
     { Setting_AxisExtended1, Group_Axis0, "?-axis hold current", "%", Format_Int8, "##0", "5", "100", Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL }
 };
 
@@ -132,9 +143,16 @@ static setting_details_t *on_get_settings (void)
 
 static status_code_t set_driver_enable (setting_id_t id, uint_fast16_t value)
 {
-    trinamic.driver_enable.mask = (uint8_t)value;
-    if(on_drivers_init)
-        on_drivers_init(trinamic.driver_enable);
+    if(trinamic.driver_enable.mask != (uint8_t)value) {
+
+        driver_enabled.mask = 0;
+        trinamic.driver_enable.mask = (uint8_t)value;
+
+        if(on_drivers_init)
+            on_drivers_init(trinamic.driver_enable);
+
+        trinamic_drivers_init(trinamic.driver_enable);
+    }
 
     return Status_OK;
 }
@@ -149,32 +167,46 @@ static uint32_t get_driver_enable (setting_id_t setting)
 // Parse and set driver specific parameters
 static status_code_t set_axis_setting (setting_id_t setting, uint_fast16_t value)
 {
-    uint_fast8_t idx;
+    uint_fast8_t axis, motor = n_motors;
     status_code_t status = Status_OK;
 
-    switch(settings_get_axis_base(setting, &idx)) {
+    switch(settings_get_axis_base(setting, &axis)) {
 
         case Setting_AxisStepperCurrent:
-            trinamic.driver[idx].current = (uint16_t)value;
-            stepper[idx]->set_current(idx, trinamic.driver[idx].current, trinamic.driver[idx].hold_current_pct);
+            trinamic.driver[axis].current = (uint16_t)value;
+            do {
+                motor--;
+                if(stepper[motor] && stepper[motor]->get_config(motor)->motor.axis == axis)
+                    stepper[motor]->set_current(motor, trinamic.driver[axis].current, trinamic.driver[axis].hold_current_pct);
+            } while(motor);
             break;
 
         case Setting_AxisExtended1: // Hold current percentage
             if(value > 100)
                 value = 100;
-            trinamic.driver[idx].hold_current_pct = (uint16_t)value;
-            stepper[idx]->set_current(idx, trinamic.driver[idx].current, trinamic.driver[idx].hold_current_pct);
+            trinamic.driver[axis].hold_current_pct = (uint16_t)value;
+            do {
+                motor--;
+                if(stepper[motor] && stepper[motor]->get_config(motor)->motor.axis == axis)
+                    stepper[motor]->set_current(motor, trinamic.driver[axis].current, trinamic.driver[axis].hold_current_pct);
+            } while(motor);
             break;
 
         case Setting_AxisMicroSteps:
-            if(stepper[idx]->microsteps_isvalid(idx, (uint16_t)value)) {
-                trinamic.driver[idx].microsteps = value;
-                stepper[idx]->set_microsteps(idx, trinamic.driver[idx].microsteps);
-                if(report.sg_status_axismask.mask & bit(idx))
-                    report.msteps = trinamic.driver[idx].microsteps;
-            }
-            else
-                status = Status_InvalidStatement;
+            do {
+                motor--;
+                if(stepper[motor] && stepper[motor]->get_config(motor)->motor.axis == axis) {
+                    if(stepper[motor]->microsteps_isvalid(motor, (uint16_t)value)) {
+                        trinamic.driver[axis].microsteps = value;
+                        stepper[motor]->set_microsteps(motor, trinamic.driver[axis].microsteps);
+                        if(report.sg_status_motormask.mask & bit(axis))
+                            report.msteps = trinamic.driver[motor].microsteps;
+                    } else {
+                        status = Status_InvalidStatement;
+                        break;
+                    }
+                }
+            } while(motor);
             break;
 
         default:
@@ -221,7 +253,7 @@ static status_code_t set_axis_setting_float (setting_id_t setting, float value)
     switch(settings_get_axis_base(setting, &idx)) {
 
         case Setting_AxisExtended0:
-            trinamic.driver[idx].homing_sensitivity = (int8_t)value;
+            trinamic.driver[idx].homing_sensitivity = (int16_t)value;
             break;
 
         default:
@@ -260,6 +292,9 @@ static void trinamic_settings_restore (void)
     trinamic.homing_enable.mask = 0;
 
     do {
+
+        trinamic.driver[idx].mode = TMCMode_StealthChop;
+
         switch(--idx) {
 
             case X_AXIS:
@@ -336,10 +371,52 @@ static void trinamic_settings_load (void)
     trinamic.driver_enable.mask = AXES_BITMASK;
 #endif
 
+    uint_fast8_t idx = N_AXIS;
+    do {
+#if TMC_STALLGUARD == 4
+        if(trinamic.driver[--idx].homing_sensitivity < 0)
+            trinamic.driver[idx].homing_sensitivity = 0;
+#else
+        if(trinamic.driver[--idx].homing_sensitivity > 64)
+            trinamic.driver[idx].homing_sensitivity = 0;
+#endif
+    } while(idx);
+
     if(on_drivers_init)
         on_drivers_init(trinamic.driver_enable);
 
-    trinamic_drivers_init();
+    trinamic_drivers_init(trinamic.driver_enable);
+}
+
+static void on_settings_changed (settings_t *settings)
+{
+    static bool init_ok = false;
+    static float steps_per_mm[N_AXIS];
+
+    uint_fast8_t idx = N_AXIS;
+
+    settings_changed(settings);
+
+    if(init_ok) {
+        do {
+            idx--;
+            if(steps_per_mm[idx] != settings->axis[idx].steps_per_mm) {
+                steps_per_mm[idx] = settings->axis[idx].steps_per_mm;
+                uint8_t motor = n_motors;
+                do {
+                    motor--;
+                    if(bit_istrue(driver_enabled.mask, bit(idx)) && idx == motor_map[motor].axis)
+                        stepper[motor]->set_tpwmthrs(motor, PWM_THRESHOLD_VELOCITY / 60.0f, steps_per_mm[idx]);
+                } while(motor);
+            }
+        } while(idx);
+    } else {
+        init_ok = true;
+        do {
+            idx--;
+            steps_per_mm[idx] = settings->axis[idx].steps_per_mm;
+        } while(idx);
+    }
 }
 
 #endif // End region settings
@@ -349,16 +426,16 @@ static void pos_failed (sys_state_t state)
     report_message("Could not communicate with stepper driver!", Message_Warning);
 }
 
-static bool trinamic_driver_config (uint_fast8_t axis)
+static bool trinamic_driver_config (motor_map_t motor)
 {
     bool ok = false;
 
     #if TRINAMIC_ENABLE == 2209
-        ok = (stepper[axis] = TMC2209_AddAxis(axis, trinamic.driver[axis].current, trinamic.driver[axis].microsteps, trinamic.driver[axis].r_sense)) != NULL;
+        ok = (stepper[motor.id] = TMC2209_AddMotor(motor, trinamic.driver[motor.axis].current, trinamic.driver[motor.axis].microsteps, trinamic.driver[motor.axis].r_sense)) != NULL;
     #elif TRINAMIC_ENABLE == 2130
-        ok = (stepper[axis] = TMC2130_AddAxis(axis, trinamic.driver[axis].current, trinamic.driver[axis].microsteps, trinamic.driver[axis].r_sense)) != NULL;
+        ok = (stepper[motor.id] = TMC2130_AddMotor(motor, trinamic.driver[motor.axis].current, trinamic.driver[motor.axis].microsteps, trinamic.driver[motor.axis].r_sense)) != NULL;
     #elif TRINAMIC_ENABLE == 5160
-        ok = (stepper[axis] = TMC5160_AddAxis(axis, trinamic.driver[axis].current, trinamic.driver[axis].microsteps, trinamic.driver[axis].r_sense)) != NULL;
+        ok = (stepper[motor.id] = TMC5160_AddMotor(motor, trinamic.driver[motor.axis].current, trinamic.driver[motor.axis].microsteps, trinamic.driver[motor.axis].r_sense)) != NULL;
     #endif
 
     if(!ok) {
@@ -367,13 +444,13 @@ static bool trinamic_driver_config (uint_fast8_t axis)
         return false;
     }
 
-    driver_enabled.mask |= bit(axis);
+    driver_enabled.mask |= bit(motor.axis);
 
-    switch(axis) {
+    switch(motor.axis) {
 
         case X_AXIS:
           #ifdef TMC_X_ADVANCED
-            TMC_X_ADVANCED
+            TMC_X_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_X_MONITOR
             dgr_enable.reg.monitor.x = TMC_X_MONITOR;
@@ -382,7 +459,7 @@ static bool trinamic_driver_config (uint_fast8_t axis)
 
         case Y_AXIS:
           #ifdef TMC_Y_ADVANCED
-            TMC_Y_ADVANCED
+            TMC_Y_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_Y_MONITOR
             dgr_enable.reg.monitor.x = TMC_Y_MONITOR;
@@ -391,7 +468,7 @@ static bool trinamic_driver_config (uint_fast8_t axis)
 
         case Z_AXIS:
           #ifdef TMC_Z_ADVANCED
-            TMC_Z_ADVANCED
+            TMC_Z_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_Z_MONITOR
             dgr_enable.reg.monitor.x = TMC_Z_MONITOR;
@@ -401,7 +478,7 @@ static bool trinamic_driver_config (uint_fast8_t axis)
 #ifdef A_AXIS
         case A_AXIS:
           #ifdef TMC_A_ADVANCED
-            TMC_A_ADVANCED
+            TMC_A_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_A_MONITOR
             dgr_enable.reg.monitor.x = TMC_A_MONITOR;
@@ -412,7 +489,7 @@ static bool trinamic_driver_config (uint_fast8_t axis)
 #ifdef B_AXIS
         case B_AXIS:
           #ifdef TMC_B_ADVANCED
-            TMC_B_ADVANCED
+            TMC_B_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_B_MONITOR
             dgr_enable.reg.monitor.x = TMC_B_MONITOR;
@@ -423,7 +500,7 @@ static bool trinamic_driver_config (uint_fast8_t axis)
 #ifdef C_AXIS
         case C_AXIS:
           #ifdef TMC_C_ADVANCED
-            TMC_C_ADVANCED
+            TMC_C_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_C_MONITOR
             dgr_enable.reg.monitor.x = TMC_C_MONITOR;
@@ -432,8 +509,9 @@ static bool trinamic_driver_config (uint_fast8_t axis)
 #endif
     }
 
-    stepper[axis]->set_current(axis, trinamic.driver[axis].current, trinamic.driver[axis].hold_current_pct);
-    stepper[axis]->set_microsteps(axis, trinamic.driver[axis].microsteps);
+    stepper[motor.id]->set_tpwmthrs(motor.id, PWM_THRESHOLD_VELOCITY / 60.0f, settings.axis[motor.axis].steps_per_mm);
+    stepper[motor.id]->set_current(motor.id, trinamic.driver[motor.axis].current, trinamic.driver[motor.axis].hold_current_pct);
+    stepper[motor.id]->set_microsteps(motor.id, trinamic.driver[motor.axis].microsteps);
 
   #if TRINAMIC_I2C
     tmc_spi_write((trinamic_motor_t){0}, (TMC_spi_datagram_t *)&dgr_enable);
@@ -442,15 +520,21 @@ static bool trinamic_driver_config (uint_fast8_t axis)
     return true;
 }
 
-static void trinamic_drivers_init (void)
+static void trinamic_drivers_init (axes_signals_t axes)
 {
-    uint_fast8_t idx = N_AXIS;
+    bool ok = axes.value != 0;
+    uint_fast8_t motor = n_motors;
+
     do {
-        if(bit_istrue(trinamic.driver_enable.mask, bit(--idx))) {
-            if(!trinamic_driver_config(idx))
-                break;
-        }
-    } while(idx);
+        if(bit_istrue(axes.mask, bit(motor_map[--motor].axis)))
+            ok = trinamic_driver_config(motor_map[motor]);
+    } while(ok && motor);
+
+    if(!ok) {
+        motor = n_motors;
+        // unlink motors...
+    }
+
 }
 
 // Add warning info to next realtime report when warning flag set by drivers
@@ -489,7 +573,7 @@ static void write_line (char *s)
 static void report_sg_status (sys_state_t state)
 {
     hal.stream.write("[SG:");
-    hal.stream.write(uitoa(stepper[report.sg_status_axis]->get_drv_status(report.sg_status_axis).sg_result));
+    hal.stream.write(uitoa(stepper[report.sg_status_motor]->get_sg_result(report.sg_status_motor)));
     hal.stream.write("]" ASCII_EOL);
 }
 
@@ -499,7 +583,7 @@ static void stepper_pulse_start (stepper_t *motors)
 
     hal_stepper_pulse_start(motors);
 
-    if(motors->step_outbits.mask & report.sg_status_axismask.mask) {
+    if(motors->step_outbits.mask & report.sg_status_motormask.mask) {
         uint32_t ms = hal.get_elapsed_ticks();
         if(ms - step_count >= 20) {
             step_count = ms;
@@ -517,11 +601,21 @@ static void stepper_pulse_start (stepper_t *motors)
 
 static void report_sg_params (void)
 {
-    sprintf(sbuf, "[SGPARAMS:%ld:%d:%d:%d]" ASCII_EOL, report.sg_status_axis, stepper[report.sg_status_axis].coolconf.reg.sfilt, stepper[report.sg_status_axis].coolconf.reg.semin, stepper[report.sg_status_axis].coolconf.reg.semax);
+    sprintf(sbuf, "[SGPARAMS:%ld:%d:%d:%d]" ASCII_EOL, report.sg_status_motor, stepper[report.sg_status_motor].coolconf.reg.sfilt, stepper[report.sg_status_motor].coolconf.reg.semin, stepper[report.sg_status_motor].coolconf.reg.semax);
     hal.stream.write(sbuf);
 }
 
 #endif
+
+static char *get_axisname (motor_map_t motor)
+{
+    static char axisname[3] = {0};
+
+    axisname[0] = axis_letter[motor.axis][0];
+    axisname[1] = motor.id == motor.axis ? '\0' : '2';
+
+    return axisname;
+}
 
 // Validate M-code axis parameters
 // Sets value to NAN (Not A Number) and returns false if driver not installed
@@ -591,7 +685,7 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
                 if(isnan(gc_block->values.r) || isnan(gc_block->values.q))
                     state = Status_BadNumberFormat;
                 else {
-                    reg_ptr = TMC5160_GetRegPtr(&stepper[report.sg_status_axis], (tmc5160_regaddr_t)gc_block->values.r);
+                    reg_ptr = TMC5160_GetRegPtr(&stepper[report.sg_status_motor], (tmc5160_regaddr_t)gc_block->values.r);
                     state = reg_ptr == NULL ? Status_GcodeValueOutOfRange : Status_OK;
                     (*parameter_words).r = (*parameter_words).q = Off;
                 }
@@ -653,11 +747,17 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
         case Trinamic_HomingSensitivity:
             if(check_params(gc_block)) {
                 uint_fast8_t idx = N_AXIS;
-                state = Status_OK;
-                do {
+                state = gc_block->words.i && (isnan(gc_block->values.ijk[0]) || gc_block->values.ijk[0] != 1.0f) ? Status_BadNumberFormat : Status_OK;
+                gc_block->words.i = Off;
+                if(state == Status_OK) do {
                     idx--;
+#if TMC_STALLGUARD == 4
+                    if(!isnan(gc_block->values.xyz[idx]) && (gc_block->values.xyz[idx] < 0.0f || gc_block->values.xyz[idx] > 255.0f))
+                        state = Status_BadNumberFormat;
+#else
                     if(!isnan(gc_block->values.xyz[idx]) && (gc_block->values.xyz[idx] < -64.0f || gc_block->values.xyz[idx] > 63.0f))
                         state = Status_BadNumberFormat;
+#endif
                 } while(idx && state == Status_OK);
             }
             break;
@@ -674,7 +774,7 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
 static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block)
 {
     bool handled = true;
-    uint_fast8_t idx = N_AXIS;
+    uint_fast8_t motor = n_motors;
 
     switch(gc_block->user_mcode) {
 
@@ -686,7 +786,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
         case Trinamic_WriteRegister:
             reg_ptr->payload.value = (uint32_t)gc_block->values.q;
-            TMC5160_WriteRegister(&stepper[report.sg_status_axis], reg_ptr);
+            TMC5160_WriteRegister(&stepper[report.sg_status_motor], reg_ptr);
             break;
 
 #endif
@@ -699,7 +799,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                 if(!write_report) {
 
                     if(gc_block->words.i)
-                        trinamic_drivers_init();
+                        trinamic_drivers_init(driver_enabled);
 
                     if(gc_block->words.h)
                         report.sfilt = gc_block->values.h != 0.0f;
@@ -727,13 +827,18 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
                 if(!write_report) {
 
-                    stepper[report.sg_status_axis]->stallguard_enable(report.sg_status_axis, false, trinamic.driver[report.sg_status_axis].homing_sensitivity);
+                    motor = report.sg_status_motor;
+
+                    if(trinamic.driver[motor].mode == TMCMode_StealthChop)
+                        stepper[motor]->stealthchop_enable(motor);
+                    else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
+                        stepper[motor]->coolstep_enable(motor);
 
                     if(axes.mask) {
                         uint32_t axis = 0, mask = axes.mask;
                         while(mask) {
                             if(mask & 0x01) {
-                                report.sg_status_axis = axis;
+                                report.sg_status_motor = axis;
                                 break;
                             }
                             axis++;
@@ -741,18 +846,20 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                         }
                     }
 
+                    motor = report.sg_status_motor;
+
                     if(report.sg_status_enable) {
-                        report.sg_status_axismask.mask = 1 << report.sg_status_axis;
-                        report.msteps = trinamic.driver[report.sg_status_axis].microsteps;
+                        report.sg_status_motormask.mask = 1 << report.sg_status_motor;
+                        report.msteps = trinamic.driver[report.sg_status_motor].microsteps;
                         if(hal_stepper_pulse_start == NULL) {
                             hal_stepper_pulse_start = hal.stepper.pulse_start;
                             hal.stepper.pulse_start = stepper_pulse_start;
                         }
-                        stepper[report.sg_status_axis]->stallguard_enable(report.sg_status_axis, report.sg_status_enable, trinamic.driver[report.sg_status_axis].homing_sensitivity);
-                        stepper[report.sg_status_axis]->sg_filter(report.sg_status_axis, report.sfilt);
-                        if(stepper[report.sg_status_axis]->set_thigh_raw) // TODO: TMC2209 do not have this...
-                            stepper[report.sg_status_axis]->set_thigh_raw(report.sg_status_axis, 0);
-                        stepper[report.sg_status_axis]->set_tcoolthrs_raw(report.sg_status_axis, 0xFFFFF);
+                        stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[motor].steps_per_mm, trinamic.driver[motor].homing_sensitivity);
+                        stepper[motor]->sg_filter(motor, report.sfilt);
+                        if(stepper[motor]->set_thigh_raw) // TODO: TMC2209 do not have this...
+                            stepper[motor]->set_thigh_raw(motor, 0);
+                        stepper[motor]->set_tcoolthrs_raw(motor, 0xFFFFF);
                     } else if(hal_stepper_pulse_start != NULL) {
                         hal.stepper.pulse_start = hal_stepper_pulse_start;
                         hal_stepper_pulse_start = NULL;
@@ -765,22 +872,21 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
         case Trinamic_StepperCurrent:
             do {
-                idx--;
-                if(!isnan(gc_block->values.xyz[idx]))
-                    stepper[idx]->set_current(idx, (uint16_t)gc_block->values.xyz[idx],
-                                                      isnan(gc_block->values.q) ? trinamic.driver[idx].hold_current_pct : (uint8_t)gc_block->values.q);
-            } while(idx);
+                if(!isnan(gc_block->values.xyz[motor_map[--motor].axis]))
+                    stepper[motor]->set_current(motor, (uint16_t)gc_block->values.xyz[motor_map[motor].axis],
+                                                      isnan(gc_block->values.q) ? trinamic.driver[motor_map[motor].axis].hold_current_pct : (uint8_t)gc_block->values.q);
+            } while(motor);
             break;
 
         case Trinamic_ReportPrewarnFlags:
             {
                 TMC_drv_status_t status;
                 strcpy(sbuf, "[TMCPREWARN:");
-                for(idx = 0; idx < N_AXIS; idx++) {
-                    if(bit_istrue(driver_enabled.mask, bit(idx))) {
-                        status = stepper[idx]->get_drv_status(idx);
+                for(motor = 0; motor < n_motors; motor++) {
+                    if(bit_istrue(driver_enabled.mask, bit(motor_map[motor].axis))) {
+                        status = stepper[motor]->get_drv_status(motor);
                         strcat(sbuf, "|");
-                        strcat(sbuf, axis_letter[idx]);
+                        strcat(sbuf, get_axisname(motor_map[motor]));
                         strcat(sbuf, ":");
                         if(status.driver_error)
                             strcat(sbuf, "E");
@@ -798,27 +904,33 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
         case Trinamic_ClearPrewarnFlags:
             otpw_triggered.mask = 0;
 #if TRINAMIC_DEV
-            stallGuard_enable(report.sg_status_axis, true); // TODO: (re)move this...
+            stallGuard_enable(report.sg_status_motor, true); // TODO: (re)move this...
 #endif
             break;
 
         case Trinamic_HybridThreshold:
-            do {
-                idx--;
-//?                if(!isnan(gc_block->values.xyz[idx]))
-//                    TMC5160_SetHybridThreshold(&stepper[idx], gc_block->values.xyz[idx], settings.axis[idx].steps_per_mm);
-            } while(idx);
+            {
+                uint_fast8_t axis;
+                do {
+                    axis = motor_map[--motor].axis;
+                    if(!isnan(gc_block->values.xyz[axis])) // mm/min
+                        stepper[motor]->set_tpwmthrs(motor, gc_block->values.xyz[axis] / 60.0f, settings.axis[axis].steps_per_mm);
+                } while(motor);
+            }
             break;
 
         case Trinamic_HomingSensitivity:
-            do {
-                idx--;
-                if(!isnan(gc_block->values.xyz[idx])) {
-                    trinamic.driver[idx].homing_sensitivity = (int8_t)gc_block->values.xyz[idx];
-                    stepper[idx]->sg_filter(idx, report.sfilt);
-                    stepper[idx]->sg_stall_value(idx, trinamic.driver[idx].homing_sensitivity); // 7 bits signed
-                }
-            } while(idx);
+            {
+                uint_fast8_t axis;
+                do {
+                    axis = motor_map[--motor].axis;
+                    if(!isnan(gc_block->values.xyz[axis])) {
+                        trinamic.driver[axis].homing_sensitivity = (int8_t)gc_block->values.xyz[axis];
+                        stepper[motor]->sg_filter(motor, report.sfilt);
+                        stepper[motor]->sg_stall_value(motor, trinamic.driver[axis].homing_sensitivity);
+                    }
+                } while(motor);
+            }
             break;
 
         default:
@@ -831,14 +943,13 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 }
 
 #if TRINAMIC_I2C
-// Called by stepperEnable in driver.c
-axes_signals_t trinamic_stepper_enable (axes_signals_t enable)
+static void trinamic_stepper_enable (axes_signals_t enable)
 {
+    enable.mask ^= settings.steppers.enable_invert.mask;
+
     dgr_enable.reg.enable.mask = enable.mask & driver_enabled.mask;
 
     tmc_spi_write((trinamic_motor_t){0}, (TMC_spi_datagram_t *)&dgr_enable);
-
-    return driver_enabled;
 }
 #endif
 
@@ -848,25 +959,33 @@ static limit_signals_t trinamic_limits (void)
     limit_signals_t signals = limits_get_state(); // read from switches first
 
     signals.min.mask &= ~homing.mask;
+    signals.min2.mask &= ~homing.mask;
 
     if(hal.clear_bits_atomic(&diag1_poll, 0)) {
         // TODO: read I2C bridge status register instead of polling drivers when using I2C comms
-        uint_fast8_t idx = N_AXIS;
+        uint_fast8_t motor = n_motors;
         do {
-            if(bit_istrue(homing.mask, bit(--idx))) {
-                if(stepper[idx]->get_drv_status(idx).stallguard)
-                    bit_true(signals.min.mask, idx);
+            if(bit_istrue(homing.mask, bit(motor_map[--motor].axis))) {
+                if(stepper[motor]->get_drv_status(motor).stallguard) {
+                    if(motor == motor_map[motor].axis)
+                        bit_true(signals.min.mask, motor_map[motor].axis);
+                    else
+                        bit_true(signals.min2.mask, motor_map[motor].axis);
+                }
             }
-        } while(idx);
+        } while(motor);
     }
 
     return signals;
 }
 
 // Configure sensorless homing for enabled axes
-void trinamic_homing (bool enable)
+static void trinamic_homing (bool on, bool enable)
 {
-    uint_fast8_t idx = N_AXIS;
+    uint_fast8_t motor = n_motors, axis;
+
+    if(limits_enable)
+        limits_enable(on, enable);
 
     homing.mask = driver_enabled.mask & trinamic.homing_enable.mask;
 
@@ -874,13 +993,16 @@ void trinamic_homing (bool enable)
     enable = enable && homing.mask;
 
     do {
-        if(bit_istrue(driver_enabled.mask, bit(--idx))) {
-            stepper[idx]->stallguard_enable(report.sg_status_axis, bit_istrue(homing.mask, bit(idx)), trinamic.driver[idx].homing_sensitivity);
-            stepper[idx]->set_tcoolthrs(idx, settings.homing.feed_rate / 60.0f * 1.5f, settings.axis[idx].steps_per_mm);
-            if(stepper[idx]->set_thigh) // TODO: TMC2209 do not have this...
-            	stepper[idx]->set_thigh(idx,  settings.homing.feed_rate / 60.0f * 0.6f, settings.axis[idx].steps_per_mm);
+        axis = motor_map[--motor].axis;
+        if(bit_istrue(driver_enabled.mask, bit(axis))) {
+            if(bit_istrue(homing.mask, bit(axis)))
+                stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_sensitivity);
+            else if(trinamic.driver[motor].mode == TMCMode_StealthChop)
+                stepper[motor]->stealthchop_enable(motor);
+            else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
+                stepper[motor]->coolstep_enable(motor);
         }
-    } while(idx);
+    } while(motor);
 
     if(enable) {
         if(limits_get_state == NULL) {
@@ -906,145 +1028,148 @@ static void write_debug_report (uint_fast8_t axes)
         TMC_ihold_irun_t ihold_irun;
     } debug_report_t;
 
-    uint_fast8_t idx = N_AXIS;
+    uint_fast8_t motor = n_motors;
     bool has_gscaler = false;
-    debug_report_t debug_report[N_AXIS];
+    debug_report_t debug_report[6];
 
     hal.stream.write("[TRINAMIC]" ASCII_EOL);
 
     do {
-        if(bit_istrue(axes, bit(--idx))) {
-            debug_report[idx].drv_status = stepper[idx]->get_drv_status(idx);
-            debug_report[idx].chopconf = stepper[idx]->get_chopconf(idx);
-            debug_report[idx].tstep = stepper[idx]->get_tstep(idx);
-            debug_report[idx].current = stepper[idx]->get_current(idx);
-            debug_report[idx].ihold_irun =  stepper[idx]->get_ihold_irun(idx);
-//            TMC5160_ReadRegister(&stepper[idx], (TMC5160_datagram_t *)&stepper[idx]->pwm_scale);
-            if(debug_report[idx].drv_status.otpw)
-                otpw_triggered.mask |= bit(idx);
-            has_gscaler |= !!stepper[idx]->get_global_scaler;
+        if(bit_istrue(axes, bit(motor_map[--motor].axis))) {
+            debug_report[motor].drv_status = stepper[motor]->get_drv_status(motor);
+            debug_report[motor].chopconf = stepper[motor]->get_chopconf(motor);
+            debug_report[motor].tstep = stepper[motor]->get_tstep(motor);
+            debug_report[motor].current = stepper[motor]->get_current(motor);
+            debug_report[motor].ihold_irun =  stepper[motor]->get_ihold_irun(motor);
+//            TMC5160_ReadRegister(&stepper[motor], (TMC5160_datagram_t *)&stepper[motor]->pwm_scale);
+            if(debug_report[motor].drv_status.otpw)
+                otpw_triggered.mask |= bit(motor);
+            has_gscaler |= !!stepper[motor]->get_global_scaler;
         }
-    } while(idx);
+    } while(motor);
 
     if(report.raw) {
 
     } else {
 
         sprintf(sbuf, "%-15s", "");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", axis_letter[idx]);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", get_axisname(motor_map[motor]));
         }
 
         write_line(sbuf);
         sprintf(sbuf, "%-15s", "Driver");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", stepper[idx]->name);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", stepper[motor]->name);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "Set current");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", stepper[idx]->get_config(idx)->current);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", stepper[motor]->get_config(motor)->current);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "RMS current");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", debug_report[idx].current);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", debug_report[motor].current);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "Peak current");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8" UINT32SFMT, (uint32_t)((float)debug_report[idx].current * sqrtf(2)));
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8" UINT32SFMT, (uint32_t)((float)debug_report[motor].current * sqrtf(2)));
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "Run current");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%5d/31", debug_report[idx].ihold_irun.irun);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%5d/31", debug_report[motor].ihold_irun.irun);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "Hold current");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%5d/31", debug_report[idx].ihold_irun.ihold);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%5d/31", debug_report[motor].ihold_irun.ihold);
         }
         write_line(sbuf);
 
         if(has_gscaler) {
             sprintf(sbuf, "%-15s", "Global scaler");
-            for(idx = 0; idx < N_AXIS; idx++) {
-                if(bit_istrue(axes, bit(idx)) && stepper[idx]->get_global_scaler)
-                    sprintf(append(sbuf), "%4d/256", stepper[idx]->get_global_scaler(idx));
+            for(motor = 0; motor < n_motors; motor++) {
+                if(bit_istrue(axes, bit(motor)) && stepper[motor]->get_global_scaler)
+                    sprintf(append(sbuf), "%4d/256", stepper[motor]->get_global_scaler(motor));
             }
             write_line(sbuf);
         }
 
         sprintf(sbuf, "%-15s", "CS actual");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%5d/31", debug_report[idx].drv_status.cs_actual);
-        }
-        write_line(sbuf);
-/*
-        sprintf(sbuf, "%-15s", "PWM scale");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", stepper[idx]->pwm_scale.reg.pwm_scale);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%5d/31", debug_report[motor].drv_status.cs_actual);
         }
         write_line(sbuf);
 
+        sprintf(sbuf, "%-15s", "PWM scale");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", stepper[motor]->pwm_scale(motor));
+        }
+        write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "vsense");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes.mask, bit(idx)))
-                sprintf(append(sbuf), "%8s", stepper[idx].chopconf.reg.vsense ? "1=0.180" : "0=0.325");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis))) {
+                if(stepper[motor]->vsense)
+                    sprintf(append(sbuf), "%8s", stepper[motor]->vsense(motor) ? "1=0.180" : "0=0.325");
+                else
+                    sprintf(append(sbuf), "%8s", "N/A");
+            }
         }
         write_line(sbuf);
-*/
+
         sprintf(sbuf, "%-15s", "stealthChop");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", stepper[idx]->get_en_pwm_mode(idx) ? "true" : "false");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", stepper[motor]->get_en_pwm_mode(motor) ? "true" : "false");
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "msteps");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", 1 << (8 - debug_report[idx].chopconf.mres));
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", 1 << (8 - debug_report[motor].chopconf.mres));
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "tstep");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8" UINT32SFMT, debug_report[idx].tstep);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8" UINT32SFMT, debug_report[motor].tstep);
         }
         write_line(sbuf);
 
         hal.stream.write("pwm" ASCII_EOL);
 
         sprintf(sbuf, "%-15s", "threshold");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8" UINT32SFMT, stepper[idx]->get_tpwmthrs_raw(idx));
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8" UINT32SFMT, stepper[motor]->get_tpwmthrs_raw(motor));
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "[mm/s]");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx))) {
-                if(stepper[idx]->get_tpwmthrs_raw(idx))
-                    sprintf(append(sbuf), "%8" UINT32SFMT, stepper[idx]->get_tpwmthrs(idx, settings.axis[idx].steps_per_mm));
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis))) {
+                if(stepper[motor]->get_tpwmthrs)
+                    sprintf(append(sbuf), "%8" UINT32SFMT, (uint32_t)stepper[motor]->get_tpwmthrs(motor, settings.axis[motor_map[motor].axis].steps_per_mm));
                 else
                     sprintf(append(sbuf), "%8s", "-");
             }
@@ -1052,80 +1177,85 @@ static void write_debug_report (uint_fast8_t axes)
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "OT prewarn");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", debug_report[idx].drv_status.otpw ? "true" : "false");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.otpw ? "true" : "false");
         }
         write_line(sbuf);
 
         hal.stream.write("OT prewarn has" ASCII_EOL);
         sprintf(sbuf, "%-15s", "been triggered");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", bit_istrue(otpw_triggered.mask, bit(idx)) ? "true" : "false");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", bit_istrue(otpw_triggered.mask, bit(motor_map[motor].axis)) ? "true" : "false");
         }
         write_line(sbuf);
 
 /*
         sprintf(sbuf, "%-15s", "pwm autoscale");
 
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", stepper[idx]->pwmconf.reg.pwm_autoscale);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", stepper[motor]->pwmconf.reg.pwm_autoscale);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "pwm ampl");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", stepper[idx]->pwmconf.reg.pwm_ampl);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", stepper[motor]->pwmconf.reg.pwm_ampl);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "pwm grad");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", stepper[idx]->pwmconf.reg.pwm_grad);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", stepper[motor]->pwmconf.reg.pwm_grad);
         }
         write_line(sbuf);
 */
 
         sprintf(sbuf, "%-15s", "off time");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", debug_report[idx].chopconf.toff);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", debug_report[motor].chopconf.toff);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "blank time");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", debug_report[idx].chopconf.tbl);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", debug_report[motor].chopconf.tbl);
         }
         write_line(sbuf);
 
         hal.stream.write("hysteresis" ASCII_EOL);
 
         sprintf(sbuf, "%-15s", "-end");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", (int)debug_report[idx].chopconf.hend - 3);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", (int)debug_report[motor].chopconf.hend - 3);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "-start");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", debug_report[idx].chopconf.hstrt + 1);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", debug_report[motor].chopconf.hstrt + 1);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "Stallguard thrs");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx))) {
-                int8_t x = stepper[idx]->get_sg_stall_value(idx);
-                x |= (x & 0x40) ? 0x80 : 0x00;
-                sprintf(append(sbuf), "%8d", (int)x);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis))) {
+#if TMC_STALLGUARD == 4
+                uint8_t sgvalue = stepper[motor]->get_sg_stall_value(motor);
+                sprintf(append(sbuf), "%8d", sgvalue);
+#else
+                int8_t sgvalue = stepper[motor]->get_sg_stall_value(motor);
+                sgvalue |= (sgvalue & 0x40) ? 0x80 : 0x00;
+                sprintf(append(sbuf), "%8d", (int)sgvalue);
+#endif
             }
         }
         write_line(sbuf);
@@ -1135,73 +1265,73 @@ static void write_debug_report (uint_fast8_t axes)
         sprintf(sbuf, "%-15s", "stallguard");
         write_line(sbuf);
         sprintf(sbuf, "%-15s", "sg_result");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8d", debug_report[idx].drv_status.sg_result);
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", debug_report[motor].drv_status.sg_result);
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "stst");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", debug_report[idx].drv_status.stst ? "*" : "");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.stst ? "*" : "");
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "fsactive");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", debug_report[idx].drv_status.fsactive ? "*" : "");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.fsactive ? "*" : "");
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "olb");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", debug_report[idx].drv_status.olb ? "*" : "");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.olb ? "*" : "");
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "ola");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", debug_report[idx].drv_status.ola ? "*" : "");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.ola ? "*" : "");
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "s2gb");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", debug_report[idx].drv_status.s2gb ? "*" : "");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.s2gb ? "*" : "");
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "s2ga");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", debug_report[idx].drv_status.s2ga ? "*" : "");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.s2ga ? "*" : "");
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "otpw");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", debug_report[idx].drv_status.otpw ? "*" : "");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.otpw ? "*" : "");
         }
         write_line(sbuf);
 
         sprintf(sbuf, "%-15s", "ot");
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx)))
-                sprintf(append(sbuf), "%8s", debug_report[idx].drv_status.ot ? "*" : "");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.ot ? "*" : "");
         }
         write_line(sbuf);
 
         hal.stream.write("STATUS REGISTERS:" ASCII_EOL);
-        for(idx = 0; idx < N_AXIS; idx++) {
-            if(bit_istrue(axes, bit(idx))) {
-                uint32_t reg = stepper[idx]->get_drv_status_raw(idx);
-                sprintf(sbuf, " %s = 0x%02X:%02X:%02X:%02X", axis_letter[idx], (uint8_t)(reg >> 24), (uint8_t)((reg >> 16) & 0xFF), (uint8_t)((reg >> 8) & 0xFF), (uint8_t)(reg & 0xFF));
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis))) {
+                uint32_t reg = stepper[motor]->get_drv_status_raw(motor);
+                sprintf(sbuf, " %s = 0x%02X:%02X:%02X:%02X", get_axisname(motor_map[motor]), (uint8_t)(reg >> 24), (uint8_t)((reg >> 16) & 0xFF), (uint8_t)((reg >> 8) & 0xFF), (uint8_t)(reg & 0xFF));
                 write_line(sbuf);
             }
         }
@@ -1220,9 +1350,39 @@ static void onReportOptions (bool newopt)
     }
 }
 
+static void count_motors (motor_map_t motor)
+{
+    n_motors++;
+}
+
+static void assign_motors (motor_map_t motor)
+{
+    motor_map[n_motors++].value = motor.value;
+}
+
 bool trinamic_init (void)
 {
-    if((nvs_address = nvs_alloc(sizeof(trinamic_settings_t)))) {
+    if(hal.stepper.motor_iterator) {
+        hal.stepper.motor_iterator(count_motors);
+        if((motor_map = malloc(n_motors * sizeof(motor_map_t)))) {
+            n_motors = 0;
+            hal.stepper.motor_iterator(assign_motors);
+        }
+    } else {
+        motor_map = malloc(N_AXIS * sizeof(motor_map_t));
+        if(motor_map) {
+
+        uint_fast8_t idx;
+//        n_motors = N_AXIS;
+        for(idx = 0; idx < N_AXIS; idx++) {
+            motor_map[idx].id = idx;
+            motor_map[idx].axis = idx;
+        }
+        n_motors = idx;
+        }
+    }
+
+    if(motor_map && (nvs_address = nvs_alloc(sizeof(trinamic_settings_t)))) {
 
         memcpy(&user_mcode, &hal.user_mcode, sizeof(user_mcode_ptrs_t));
 
@@ -1238,6 +1398,17 @@ bool trinamic_init (void)
 
         details.on_get_settings = grbl.on_get_settings;
         grbl.on_get_settings = on_get_settings;
+
+        settings_changed = hal.settings_changed;
+        hal.settings_changed = on_settings_changed;
+
+        limits_enable = hal.limits.enable;
+        hal.limits.enable = trinamic_homing;
+
+#if TRINAMIC_I2C
+        stepper_enable = hal.stepper.enable;
+        hal.stepper.enable = trinamic_stepper_enable;
+#endif
     }
 
     return nvs_address != 0;
