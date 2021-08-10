@@ -43,11 +43,11 @@
 #include "../grbl/report.h"
 #include "../grbl/platform.h"
 
-static bool warning = false, is_homing = false;
+static bool warning = false, is_homing = false, settings_loaded = false;
 static volatile uint_fast16_t diag1_poll = 0;
 static char sbuf[65]; // string buffer for reports
 static uint_fast8_t n_motors = 0;
-static const tmchal_t *stepper[N_TMC_MOTORS];
+static const tmchal_t *stepper[TMC_N_MOTORS_MAX];
 static motor_map_t *motor_map;
 static axes_signals_t homing = {0}, otpw_triggered = {0}, driver_enabled = {0};
 static limits_get_state_ptr limits_get_state = NULL;
@@ -56,6 +56,7 @@ static stepper_pulse_start_ptr hal_stepper_pulse_start = NULL;
 static nvs_address_t nvs_address;
 static on_realtime_report_ptr on_realtime_report;
 static on_report_options_ptr on_report_options;
+static driver_setup_ptr driver_setup;
 static settings_changed_ptr settings_changed;
 static trinamic_on_drivers_init_ptr on_drivers_init;
 static user_mcode_ptrs_t user_mcode;
@@ -360,32 +361,37 @@ static void trinamic_settings_restore (void)
     } while(idx);
 
     hal.nvs.memcpy_to_nvs(nvs_address, (uint8_t *)&trinamic, sizeof(trinamic_settings_t), true);
+
+    if(settings_loaded) {
+        if(on_drivers_init)
+            on_drivers_init(trinamic.driver_enable);
+
+        trinamic_drivers_init(trinamic.driver_enable);
+    }
 }
 
 static void trinamic_settings_load (void)
 {
     if(hal.nvs.memcpy_from_nvs((uint8_t *)&trinamic, nvs_address, sizeof(trinamic_settings_t), true) != NVS_TransferResult_OK)
         trinamic_settings_restore();
+    else {
+        uint_fast8_t idx = N_AXIS;
+        do {
+#if TMC_STALLGUARD == 4
+            if(trinamic.driver[--idx].homing_sensitivity < 0)
+                trinamic.driver[idx].homing_sensitivity = 0;
+#else
+            if(trinamic.driver[--idx].homing_sensitivity > 64)
+                trinamic.driver[idx].homing_sensitivity = 0;
+#endif
+        } while(idx);
+    }
 
 #if !TRINAMIC_MIXED_DRIVERS
     trinamic.driver_enable.mask = AXES_BITMASK;
 #endif
 
-    uint_fast8_t idx = N_AXIS;
-    do {
-#if TMC_STALLGUARD == 4
-        if(trinamic.driver[--idx].homing_sensitivity < 0)
-            trinamic.driver[idx].homing_sensitivity = 0;
-#else
-        if(trinamic.driver[--idx].homing_sensitivity > 64)
-            trinamic.driver[idx].homing_sensitivity = 0;
-#endif
-    } while(idx);
-
-    if(on_drivers_init)
-        on_drivers_init(trinamic.driver_enable);
-
-    trinamic_drivers_init(trinamic.driver_enable);
+    settings_loaded = true;
 }
 
 static void on_settings_changed (settings_t *settings)
@@ -523,18 +529,26 @@ static bool trinamic_driver_config (motor_map_t motor)
 static void trinamic_drivers_init (axes_signals_t axes)
 {
     bool ok = axes.value != 0;
-    uint_fast8_t motor = n_motors;
+    uint_fast8_t motor = n_motors, n_enabled = 0;
 
     do {
-        if(bit_istrue(axes.mask, bit(motor_map[--motor].axis)))
-            ok = trinamic_driver_config(motor_map[motor]);
+        if(bit_istrue(axes.mask, bit(motor_map[--motor].axis))) {
+            if((ok = trinamic_driver_config(motor_map[motor])))
+                n_enabled++;
+        }
     } while(ok && motor);
+
+    tmc_motors_set(ok ? n_enabled : 0);
 
     if(!ok) {
         motor = n_motors;
-        // unlink motors...
+        driver_enabled.mask = 0;
+        do {
+            if(stepper[--motor]) {
+                stepper[motor] = NULL; // unlink motors...
+            }
+        } while(motor);
     }
-
 }
 
 // Add warning info to next realtime report when warning flag set by drivers
@@ -660,9 +674,9 @@ static user_mcode_t trinamic_MCodeCheck (user_mcode_t mcode)
         return mcode;
 #endif
 
-    return driver_enabled.mask &&
-            (mcode == Trinamic_DebugReport || mcode == Trinamic_StepperCurrent || mcode == Trinamic_ReportPrewarnFlags ||
-              mcode == Trinamic_ClearPrewarnFlags || mcode == Trinamic_HybridThreshold || mcode == Trinamic_HomingSensitivity)
+    return mcode == Trinamic_DebugReport ||
+            (driver_enabled.mask && (mcode == Trinamic_StepperCurrent || mcode == Trinamic_ReportPrewarnFlags || mcode == Trinamic_ClearPrewarnFlags ||
+                                      mcode == Trinamic_HybridThreshold || mcode == Trinamic_HomingSensitivity))
               ? mcode
               : (user_mcode.check ? user_mcode.check(mcode) : UserMCode_Ignore);
 }
@@ -793,6 +807,16 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
         case Trinamic_DebugReport:
             {
+                if(driver_enabled.mask != trinamic.driver_enable.mask) {
+                    pos_failed(state_get());
+                    return;
+                }
+
+                if(!trinamic.driver_enable.mask) {
+                    hal.stream.write("TMC driver(s) not enabled, enable with $338 setting." ASCII_EOL);
+                    return;
+                }
+
                 axes_signals_t axes = {0};
                 bool write_report = !(gc_block->words.i || gc_block->words.s || gc_block->words.h || gc_block->words.q);
 
@@ -925,7 +949,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                 do {
                     axis = motor_map[--motor].axis;
                     if(!isnan(gc_block->values.xyz[axis])) {
-                        trinamic.driver[axis].homing_sensitivity = (int8_t)gc_block->values.xyz[axis];
+                        trinamic.driver[axis].homing_sensitivity = (int16_t)gc_block->values.xyz[axis];
                         stepper[motor]->sg_filter(motor, report.sfilt);
                         stepper[motor]->sg_stall_value(motor, trinamic.driver[axis].homing_sensitivity);
                     }
@@ -1247,16 +1271,8 @@ static void write_debug_report (uint_fast8_t axes)
 
         sprintf(sbuf, "%-15s", "Stallguard thrs");
         for(motor = 0; motor < n_motors; motor++) {
-            if(bit_istrue(axes, bit(motor_map[motor].axis))) {
-#if TMC_STALLGUARD == 4
-                uint8_t sgvalue = stepper[motor]->get_sg_stall_value(motor);
-                sprintf(append(sbuf), "%8d", sgvalue);
-#else
-                int8_t sgvalue = stepper[motor]->get_sg_stall_value(motor);
-                sgvalue |= (sgvalue & 0x40) ? 0x80 : 0x00;
-                sprintf(append(sbuf), "%8d", (int)sgvalue);
-#endif
-            }
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8d", stepper[motor]->get_sg_stall_value(motor));
         }
         write_line(sbuf);
 
@@ -1271,17 +1287,17 @@ static void write_debug_report (uint_fast8_t axes)
         }
         write_line(sbuf);
 
-        sprintf(sbuf, "%-15s", "stst");
-        for(motor = 0; motor < n_motors; motor++) {
-            if(bit_istrue(axes, bit(motor_map[motor].axis)))
-                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.stst ? "*" : "");
-        }
-        write_line(sbuf);
-
         sprintf(sbuf, "%-15s", "fsactive");
         for(motor = 0; motor < n_motors; motor++) {
             if(bit_istrue(axes, bit(motor_map[motor].axis)))
                 sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.fsactive ? "*" : "");
+        }
+        write_line(sbuf);
+
+        sprintf(sbuf, "%-15s", "stst");
+        for(motor = 0; motor < n_motors; motor++) {
+            if(bit_istrue(axes, bit(motor_map[motor].axis)))
+                sprintf(append(sbuf), "%8s", debug_report[motor].drv_status.stst ? "*" : "");
         }
         write_line(sbuf);
 
@@ -1343,7 +1359,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.04]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.05]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
@@ -1358,6 +1374,21 @@ static void count_motors (motor_map_t motor)
 static void assign_motors (motor_map_t motor)
 {
     motor_map[n_motors++].value = motor.value;
+}
+
+static bool on_driver_setup (settings_t *settings)
+{
+    bool ok;
+
+    if((ok = driver_setup(settings))) {
+
+        if(on_drivers_init)
+            on_drivers_init(trinamic.driver_enable);
+
+        trinamic_drivers_init(trinamic.driver_enable);
+    }
+
+    return ok;
 }
 
 bool trinamic_init (void)
@@ -1398,6 +1429,9 @@ bool trinamic_init (void)
 
         details.on_get_settings = grbl.on_get_settings;
         grbl.on_get_settings = on_get_settings;
+
+        driver_setup = hal.driver_setup;
+        hal.driver_setup = on_driver_setup;
 
         settings_changed = hal.settings_changed;
         hal.settings_changed = on_settings_changed;

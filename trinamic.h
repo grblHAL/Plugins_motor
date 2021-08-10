@@ -67,7 +67,7 @@
 #define TMC_X_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, 33); \
+stepper[motor]->sg_stall_value(motor, TMC_X_SGT); \
 stepper[motor]->sedn(motor, 1); \
 stepper[motor]->semin(motor, 5); \
 stepper[motor]->semax(motor, 2); \
@@ -92,7 +92,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_Y_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, 33); \
+stepper[motor]->sg_stall_value(motor, TMC_Y_SGT); \
 stepper[motor]->sedn(motor, 1); \
 stepper[motor]->semin(motor, 5); \
 stepper[motor]->semax(motor, 2); \
@@ -118,7 +118,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_Z_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, 33); \
+stepper[motor]->sg_stall_value(motor, TMC_Z_SGT); \
 stepper[motor]->sedn(motor, 1); \
 stepper[motor]->semin(motor, 5); \
 stepper[motor]->semax(motor, 2); \
@@ -146,7 +146,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_A_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, 33); \
+stepper[motor]->sg_stall_value(motor, TMC_A_SGT); \
 stepper[motor]->sedn(motor, 1); \
 stepper[motor]->semin(motor, 5); \
 stepper[motor]->semax(motor, 2); \
@@ -175,7 +175,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_B_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, 33); \
+stepper[motor]->sg_stall_value(motor, TMC_B_SGT); \
 stepper[motor]->sedn(motor, 1); \
 stepper[motor]->semin(motor, 5); \
 stepper[motor]->semax(motor, 2); \
@@ -204,7 +204,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_C_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, 33); \
+stepper[motor]->sg_stall_value(motor, TMC_C_SGT); \
 stepper[motor]->sedn(motor, 1); \
 stepper[motor]->semin(motor, 5); \
 stepper[motor]->semax(motor, 2); \
