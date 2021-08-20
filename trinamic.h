@@ -233,7 +233,7 @@ typedef struct {
     motor_settings_t driver[N_AXIS];
 } trinamic_settings_t;
 
-typedef void (*trinamic_on_drivers_init_ptr)(axes_signals_t enabled);
+typedef void (*trinamic_on_drivers_init_ptr)(uint8_t n_motors, axes_signals_t enabled);
 
 typedef struct {
     trinamic_on_drivers_init_ptr on_drivers_init;

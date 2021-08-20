@@ -115,12 +115,29 @@ static const setting_detail_t trinamic_settings[] = {
     { Setting_AxisStepperCurrent, Group_Axis0, "?-axis motor current", "mA", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL },
     { Setting_AxisMicroSteps, Group_Axis0, "?-axis microsteps", "steps", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL },
 #if TMC_STALLGUARD == 4
-    { Setting_AxisExtended0, Group_Axis0, "?-axis stallGuard value", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
+    { Setting_AxisExtended0, Group_Axis0, "?-axis stallGuard4 threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
 #else
-    { Setting_AxisExtended0, Group_Axis0, "?-axis stallGuard value", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
+    { Setting_AxisExtended0, Group_Axis0, "?-axis stallGuard2 threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
 #endif
     { Setting_AxisExtended1, Group_Axis0, "?-axis hold current", "%", Format_Int8, "##0", "5", "100", Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL }
 };
+
+#ifndef NO_SETTINGS_DESCRIPTIONS
+
+static const setting_descr_t trinamic_settings_descr[] = {
+#if TRINAMIC_MIXED_DRIVERS
+    { Setting_TrinamicDriver, "Enable SPI or UART controlled Trinamic drivers for axes." },
+#endif
+    { Setting_TrinamicHoming, "Enable sensorless homing for axis. Requires SPI controlled Trinamic drivers." },
+    { Setting_AxisStepperCurrent, "Axis motor current in mA (RMS)." },
+    { Setting_AxisMicroSteps, "Axis microsteps per fullstep." },
+    { Setting_AxisExtended0, "" },
+    { Setting_AxisExtended2, "Motor current at standstill as a percentage of full current.\n"
+                             "NOTE: if grblHAL is configured to disable motors on standstill this setting has no use."
+    },
+};
+
+#endif
 
 static void trinamic_settings_save (void)
 {
@@ -130,6 +147,10 @@ static void trinamic_settings_save (void)
 static setting_details_t details = {
     .settings = trinamic_settings,
     .n_settings = sizeof(trinamic_settings) / sizeof(setting_detail_t),
+#ifndef NO_SETTINGS_DESCRIPTIONS
+    .descriptions = trinamic_settings_descr,
+    .n_descriptions = sizeof(trinamic_settings_descr) / sizeof(setting_descr_t),
+#endif
     .load = trinamic_settings_load,
     .save = trinamic_settings_save,
     .restore = trinamic_settings_restore
@@ -138,6 +159,23 @@ static setting_details_t details = {
 static setting_details_t *on_get_settings (void)
 {
     return &details;
+}
+
+static void trinamic_drivers_setup (void)
+{
+    if(on_drivers_init) {
+
+        uint8_t n_enabled = 0, motor = n_motors;
+
+        do {
+            if(bit_istrue(trinamic.driver_enable.mask, bit(motor_map[--motor].axis)))
+                n_enabled++;
+        } while(motor);
+
+        on_drivers_init(n_enabled, trinamic.driver_enable);
+    }
+
+    trinamic_drivers_init(trinamic.driver_enable);
 }
 
 #if TRINAMIC_MIXED_DRIVERS
@@ -149,10 +187,7 @@ static status_code_t set_driver_enable (setting_id_t id, uint_fast16_t value)
         driver_enabled.mask = 0;
         trinamic.driver_enable.mask = (uint8_t)value;
 
-        if(on_drivers_init)
-            on_drivers_init(trinamic.driver_enable);
-
-        trinamic_drivers_init(trinamic.driver_enable);
+        trinamic_drivers_setup();
     }
 
     return Status_OK;
@@ -362,12 +397,8 @@ static void trinamic_settings_restore (void)
 
     hal.nvs.memcpy_to_nvs(nvs_address, (uint8_t *)&trinamic, sizeof(trinamic_settings_t), true);
 
-    if(settings_loaded) {
-        if(on_drivers_init)
-            on_drivers_init(trinamic.driver_enable);
-
-        trinamic_drivers_init(trinamic.driver_enable);
-    }
+    if(settings_loaded)
+        trinamic_drivers_setup();
 }
 
 static void trinamic_settings_load (void)
@@ -432,7 +463,7 @@ static void pos_failed (sys_state_t state)
     report_message("Could not communicate with stepper driver!", Message_Warning);
 }
 
-static bool trinamic_driver_config (motor_map_t motor)
+static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
 {
     bool ok = false;
 
@@ -449,6 +480,8 @@ static bool trinamic_driver_config (motor_map_t motor)
     //    system_raise_alarm(Alarm_SelftestFailed);
         return false;
     }
+
+    stepper[motor.id]->get_config(motor.id)->motor.seq = seq; //
 
     driver_enabled.mask |= bit(motor.axis);
 
@@ -533,7 +566,7 @@ static void trinamic_drivers_init (axes_signals_t axes)
 
     do {
         if(bit_istrue(axes.mask, bit(motor_map[--motor].axis))) {
-            if((ok = trinamic_driver_config(motor_map[motor])))
+            if((ok = trinamic_driver_config(motor_map[motor], motor)))
                 n_enabled++;
         }
     } while(ok && motor);
@@ -1380,13 +1413,8 @@ static bool on_driver_setup (settings_t *settings)
 {
     bool ok;
 
-    if((ok = driver_setup(settings))) {
-
-        if(on_drivers_init)
-            on_drivers_init(trinamic.driver_enable);
-
-        trinamic_drivers_init(trinamic.driver_enable);
-    }
+    if((ok = driver_setup(settings)))
+        trinamic_drivers_setup();
 
     return ok;
 }
