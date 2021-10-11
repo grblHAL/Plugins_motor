@@ -49,7 +49,7 @@
 #define TMC_STALLGUARD 2
 #endif
 
-#define PWM_THRESHOLD_VELOCITY 300.0f // mm/min
+#define PWM_THRESHOLD_VELOCITY 0 // mm/min - 0 to disable, should be set > homing seek rate when enabled (use M913 to set at run time)
 
 // General
 #if TRINAMIC_MIXED_DRIVERS

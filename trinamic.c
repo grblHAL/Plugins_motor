@@ -439,12 +439,14 @@ static void on_settings_changed (settings_t *settings)
             idx--;
             if(steps_per_mm[idx] != settings->axis[idx].steps_per_mm) {
                 steps_per_mm[idx] = settings->axis[idx].steps_per_mm;
+#if PWM_THRESHOLD_VELOCITY > 0
                 uint8_t motor = n_motors;
                 do {
                     motor--;
                     if(bit_istrue(driver_enabled.mask, bit(idx)) && idx == motor_map[motor].axis)
-                        stepper[motor]->set_tpwmthrs(motor, PWM_THRESHOLD_VELOCITY / 60.0f, steps_per_mm[idx]);
+                        stepper[motor]->set_tpwmthrs(motor, (float)PWM_THRESHOLD_VELOCITY / 60.0f, steps_per_mm[idx]);
                 } while(motor);
+#endif
             }
         } while(idx);
     } else {
@@ -548,13 +550,14 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
 #endif
     }
 
-    stepper[motor.id]->set_tpwmthrs(motor.id, PWM_THRESHOLD_VELOCITY / 60.0f, settings.axis[motor.axis].steps_per_mm);
+#if PWM_THRESHOLD_VELOCITY > 0
+    stepper[motor.id]->set_tpwmthrs(motor.id, (float)PWM_THRESHOLD_VELOCITY / 60.0f, settings.axis[motor.axis].steps_per_mm);
+#endif
     stepper[motor.id]->set_current(motor.id, trinamic.driver[motor.axis].current, trinamic.driver[motor.axis].hold_current_pct);
     stepper[motor.id]->set_microsteps(motor.id, trinamic.driver[motor.axis].microsteps);
-
-  #if TRINAMIC_I2C
+#if TRINAMIC_I2C
     tmc_spi_write((trinamic_motor_t){0}, (TMC_spi_datagram_t *)&dgr_enable);
-  #endif
+#endif
 
     return true;
 }
@@ -563,6 +566,8 @@ static void trinamic_drivers_init (axes_signals_t axes)
 {
     bool ok = axes.value != 0;
     uint_fast8_t motor = n_motors, n_enabled = 0;
+
+    memset(stepper, 0, sizeof(stepper));
 
     do {
         if(bit_istrue(axes.mask, bit(motor_map[--motor].axis))) {
@@ -574,13 +579,8 @@ static void trinamic_drivers_init (axes_signals_t axes)
     tmc_motors_set(ok ? n_enabled : 0);
 
     if(!ok) {
-        motor = n_motors;
         driver_enabled.mask = 0;
-        do {
-            if(stepper[--motor]) {
-                stepper[motor] = NULL; // unlink motors...
-            }
-        } while(motor);
+        memset(stepper, 0, sizeof(stepper));
     }
 }
 
@@ -1249,6 +1249,17 @@ static void write_debug_report (uint_fast8_t axes)
         write_line(sbuf);
 
 /*
+    #if HAS_TMC220x
+      TMC_REPORT("pwm scale sum",     TMC_PWM_SCALE_SUM);
+      TMC_REPORT("pwm scale auto",    TMC_PWM_SCALE_AUTO);
+      TMC_REPORT("pwm offset auto",   TMC_PWM_OFS_AUTO);
+      TMC_REPORT("pwm grad auto",     TMC_PWM_GRAD_AUTO);
+    #endif
+        case TMC_PWM_SCALE_SUM: SERIAL_PRINT(st.pwm_scale_sum(), DEC); break;
+        case TMC_PWM_SCALE_AUTO: SERIAL_PRINT(st.pwm_scale_auto(), DEC); break;
+        case TMC_PWM_OFS_AUTO: SERIAL_PRINT(st.pwm_ofs_auto(), DEC); break;
+        case TMC_PWM_GRAD_AUTO: SERIAL_PRINT(st.pwm_grad_auto(), DEC); break;
+
         sprintf(sbuf, "%-15s", "pwm autoscale");
 
         for(motor = 0; motor < n_motors; motor++) {
@@ -1392,7 +1403,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.05]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.06]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
