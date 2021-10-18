@@ -63,6 +63,7 @@
 #define TMC_X_CURRENT 500       // mA RMS
 #define TMC_X_HOLD_CURRENT_PCT 50
 #define TMC_X_SGT 22
+#define TMC_X_HOME_FEED_SGT 22
 
 #define TMC_X_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
@@ -74,8 +75,8 @@ stepper[motor]->semax(motor, 2); \
 stepper[motor]->toff(motor, 3); \
 stepper[motor]->tbl(motor, 1); \
 stepper[motor]->chopper_mode(motor, 0); \
-stepper[motor]->hysteresis_start(motor, 4); \
-stepper[motor]->hysteresis_end(motor, -2);
+stepper[motor]->hysteresis_start(motor, 1); \
+stepper[motor]->hysteresis_end(motor, -1);
 
 #if TRINAMIC_MIXED_DRIVERS
 #define TMC_Y_ENABLE 0
@@ -88,6 +89,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_Y_CURRENT 500       // mA RMS
 #define TMC_Y_HOLD_CURRENT_PCT 50
 #define TMC_Y_SGT 22
+#define TMC_Y_HOME_FEED_SGT 22
 
 #define TMC_Y_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
@@ -99,8 +101,8 @@ stepper[motor]->semax(motor, 2); \
 stepper[motor]->toff(motor, 3); \
 stepper[motor]->tbl(motor, 1); \
 stepper[motor]->chopper_mode(motor, 0); \
-stepper[motor]->hysteresis_start(motor, 4); \
-stepper[motor]->hysteresis_end(motor, -2);
+stepper[motor]->hysteresis_start(motor, 1); \
+stepper[motor]->hysteresis_end(motor, -1);
 
 
 #if TRINAMIC_MIXED_DRIVERS
@@ -114,6 +116,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_Z_CURRENT 500       // mA RMS
 #define TMC_Z_HOLD_CURRENT_PCT 50
 #define TMC_Z_SGT 22
+#define TMC_Z_HOME_FEED_SGT 22
 
 #define TMC_Z_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
@@ -125,8 +128,8 @@ stepper[motor]->semax(motor, 2); \
 stepper[motor]->toff(motor, 3); \
 stepper[motor]->tbl(motor, 1); \
 stepper[motor]->chopper_mode(motor, 0); \
-stepper[motor]->hysteresis_start(motor, 4); \
-stepper[motor]->hysteresis_end(motor, -2);
+stepper[motor]->hysteresis_start(motor, 1); \
+stepper[motor]->hysteresis_end(motor, -1);
 
 
 #ifdef A_AXIS
@@ -142,6 +145,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_A_CURRENT 500       // mA RMS
 #define TMC_A_HOLD_CURRENT_PCT 50
 #define TMC_A_SGT 22
+#define TMC_A_HOME_FEED_SGT 22
 
 #define TMC_A_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
@@ -171,6 +175,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_B_CURRENT 500       // mA RMS
 #define TMC_B_HOLD_CURRENT_PCT 50
 #define TMC_B_SGT 22
+#define TMC_B_HOME_FEED_SGT 22
 
 #define TMC_B_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
@@ -200,6 +205,7 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_C_CURRENT 500       // mA RMS
 #define TMC_C_HOLD_CURRENT_PCT 50
 #define TMC_C_SGT 22
+#define TMC_C_HOME_FEED_SGT 22
 
 #define TMC_C_ADVANCED(motor) \
 stepper[motor]->stealthChop(motor, 0); \
@@ -225,6 +231,7 @@ typedef struct {
     uint8_t microsteps;
     trinamic_mode_t mode;
     int16_t homing_sensitivity;
+    int16_t homing_feed_sensitivity;
 } motor_settings_t;
 
 typedef struct {
