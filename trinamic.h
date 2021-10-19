@@ -43,13 +43,32 @@
 #include "../trinamic/tmc5160hal.h"
 #endif
 
+#ifndef TMC_POLL_STALLED
+#if TRINAMIC_I2C
+#define TMC_POLL_STALLED 1
+#else
+#define TMC_POLL_STALLED 0
+#endif
+#endif
+
+#ifndef PWM_THRESHOLD_VELOCITY
+#define PWM_THRESHOLD_VELOCITY 0 // mm/min - 0 to disable, should be set > homing seek rate when enabled (use M913 to set at run time)
+#endif
+
+#ifndef TMC_STEALTHCHOP
+#define TMC_STEALTHCHOP 1    // 0 = CoolStep, 1 = StealthChop
+#endif
+
 #if TRINAMIC_ENABLE == 2209
 #define TMC_STALLGUARD 4
 #else
 #define TMC_STALLGUARD 2
 #endif
 
-#define PWM_THRESHOLD_VELOCITY 0 // mm/min - 0 to disable, should be set > homing seek rate when enabled (use M913 to set at run time)
+//#define TMC_HOMING_ACCELERATION 50.0f // NOT tested... Reduce acceleration during homing to avoid falsely triggering DIAG output
+
+static const TMC_coolconf_t coolconf = { .semin = 5, .semax = 2, .sedn = 1 };
+static const TMC_chopper_timing_t chopper_timing = { .hstrt = 1, .hend = -1, .tbl = 1 };
 
 // General
 #if TRINAMIC_MIXED_DRIVERS
@@ -62,21 +81,14 @@
 #define TMC_X_R_SENSE R_SENSE   // mOhm
 #define TMC_X_CURRENT 500       // mA RMS
 #define TMC_X_HOLD_CURRENT_PCT 50
-#define TMC_X_SGT 22
-#define TMC_X_HOME_FEED_SGT 22
+#define TMC_X_HOMING_SEEK_SGT 22
+#define TMC_X_HOMING_FEED_SGT 22
 
 #define TMC_X_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, 0); \
+stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, TMC_X_SGT); \
-stepper[motor]->sedn(motor, 1); \
-stepper[motor]->semin(motor, 5); \
-stepper[motor]->semax(motor, 2); \
-stepper[motor]->toff(motor, 3); \
-stepper[motor]->tbl(motor, 1); \
-stepper[motor]->chopper_mode(motor, 0); \
-stepper[motor]->hysteresis_start(motor, 1); \
-stepper[motor]->hysteresis_end(motor, -1);
+stepper[motor]->coolconf(motor, coolconf); \
+stepper[motor]->chopper_timing(motor, chopper_timing);
 
 #if TRINAMIC_MIXED_DRIVERS
 #define TMC_Y_ENABLE 0
@@ -88,22 +100,14 @@ stepper[motor]->hysteresis_end(motor, -1);
 #define TMC_Y_R_SENSE R_SENSE   // mOhm
 #define TMC_Y_CURRENT 500       // mA RMS
 #define TMC_Y_HOLD_CURRENT_PCT 50
-#define TMC_Y_SGT 22
-#define TMC_Y_HOME_FEED_SGT 22
+#define TMC_Y_HOMING_SEEK_SGT 22
+#define TMC_Y_HOMING_FEED_SGT 22
 
 #define TMC_Y_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, 0); \
+stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, TMC_Y_SGT); \
-stepper[motor]->sedn(motor, 1); \
-stepper[motor]->semin(motor, 5); \
-stepper[motor]->semax(motor, 2); \
-stepper[motor]->toff(motor, 3); \
-stepper[motor]->tbl(motor, 1); \
-stepper[motor]->chopper_mode(motor, 0); \
-stepper[motor]->hysteresis_start(motor, 1); \
-stepper[motor]->hysteresis_end(motor, -1);
-
+stepper[motor]->coolconf(motor, coolconf); \
+stepper[motor]->chopper_timing(motor, chopper_timing);
 
 #if TRINAMIC_MIXED_DRIVERS
 #define TMC_Z_ENABLE 0
@@ -115,22 +119,14 @@ stepper[motor]->hysteresis_end(motor, -1);
 #define TMC_Z_R_SENSE R_SENSE   // mOhm
 #define TMC_Z_CURRENT 500       // mA RMS
 #define TMC_Z_HOLD_CURRENT_PCT 50
-#define TMC_Z_SGT 22
-#define TMC_Z_HOME_FEED_SGT 22
+#define TMC_Z_HOMING_SEEK_SGT 22
+#define TMC_Z_HOMING_FEED_SGT 22
 
 #define TMC_Z_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, 0); \
+stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, TMC_Z_SGT); \
-stepper[motor]->sedn(motor, 1); \
-stepper[motor]->semin(motor, 5); \
-stepper[motor]->semax(motor, 2); \
-stepper[motor]->toff(motor, 3); \
-stepper[motor]->tbl(motor, 1); \
-stepper[motor]->chopper_mode(motor, 0); \
-stepper[motor]->hysteresis_start(motor, 1); \
-stepper[motor]->hysteresis_end(motor, -1);
-
+stepper[motor]->coolconf(motor, coolconf); \
+stepper[motor]->chopper_timing(motor, chopper_timing);
 
 #ifdef A_AXIS
 
@@ -144,21 +140,14 @@ stepper[motor]->hysteresis_end(motor, -1);
 #define TMC_A_R_SENSE R_SENSE   // mOhm
 #define TMC_A_CURRENT 500       // mA RMS
 #define TMC_A_HOLD_CURRENT_PCT 50
-#define TMC_A_SGT 22
-#define TMC_A_HOME_FEED_SGT 22
+#define TMC_A_HOMING_SEEK_SGT 22
+#define TMC_A_HOMING_FEED_SGT 22
 
 #define TMC_A_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, 0); \
+stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, TMC_A_SGT); \
-stepper[motor]->sedn(motor, 1); \
-stepper[motor]->semin(motor, 5); \
-stepper[motor]->semax(motor, 2); \
-stepper[motor]->toff(motor, 3); \
-stepper[motor]->tbl(motor, 1); \
-stepper[motor]->chopper_mode(motor, 0); \
-stepper[motor]->hysteresis_start(motor, 4); \
-stepper[motor]->hysteresis_end(motor, -2);
+stepper[motor]->coolconf(motor, coolconf); \
+stepper[motor]->chopper_timing(motor, chopper_timing);
 
 #endif
 
@@ -174,21 +163,14 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_B_R_SENSE R_SENSE   // mOhm
 #define TMC_B_CURRENT 500       // mA RMS
 #define TMC_B_HOLD_CURRENT_PCT 50
-#define TMC_B_SGT 22
-#define TMC_B_HOME_FEED_SGT 22
+#define TMC_B_HOMING_SEEK_SGT 22
+#define TMC_B_HOMING_FEED_SGT 22
 
 #define TMC_B_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, 0); \
+stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, TMC_B_SGT); \
-stepper[motor]->sedn(motor, 1); \
-stepper[motor]->semin(motor, 5); \
-stepper[motor]->semax(motor, 2); \
-stepper[motor]->toff(motor, 3); \
-stepper[motor]->tbl(motor, 1); \
-stepper[motor]->chopper_mode(motor, 0); \
-stepper[motor]->hysteresis_start(motor, 4); \
-stepper[motor]->hysteresis_end(motor, -2);
+stepper[motor]->coolconf(motor, coolconf); \
+stepper[motor]->chopper_timing(motor, chopper_timing);
 
 #endif
 
@@ -204,21 +186,14 @@ stepper[motor]->hysteresis_end(motor, -2);
 #define TMC_C_R_SENSE R_SENSE   // mOhm
 #define TMC_C_CURRENT 500       // mA RMS
 #define TMC_C_HOLD_CURRENT_PCT 50
-#define TMC_C_SGT 22
-#define TMC_C_HOME_FEED_SGT 22
+#define TMC_C_HOMING_SEEK_SGT 22
+#define TMC_C_HOMING_FEED_SGT 22
 
 #define TMC_C_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, 0); \
+stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
-stepper[motor]->sg_stall_value(motor, TMC_C_SGT); \
-stepper[motor]->sedn(motor, 1); \
-stepper[motor]->semin(motor, 5); \
-stepper[motor]->semax(motor, 2); \
-stepper[motor]->toff(motor, 3); \
-stepper[motor]->tbl(motor, 1); \
-stepper[motor]->chopper_mode(motor, 0); \
-stepper[motor]->hysteresis_start(motor, 4); \
-stepper[motor]->hysteresis_end(motor, -2);
+stepper[motor]->coolconf(motor, coolconf); \
+stepper[motor]->chopper_timing(motor, chopper_timing);
 
 #endif
 
@@ -228,9 +203,9 @@ typedef struct {
     uint16_t current; // mA
     uint8_t hold_current_pct;
     uint16_t r_sense; // mOhm
-    uint8_t microsteps;
+    uint16_t microsteps;
     trinamic_mode_t mode;
-    int16_t homing_sensitivity;
+    int16_t homing_seek_sensitivity;
     int16_t homing_feed_sensitivity;
 } motor_settings_t;
 

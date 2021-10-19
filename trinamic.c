@@ -47,10 +47,13 @@ static bool warning = false, is_homing = false, settings_loaded = false;
 static volatile uint_fast16_t diag1_poll = 0;
 static char sbuf[65]; // string buffer for reports
 static uint_fast8_t n_motors = 0;
+static float current_homing_rate = 0.0f;
 static const tmchal_t *stepper[TMC_N_MOTORS_MAX];
 static motor_map_t *motor_map;
 static axes_signals_t homing = {0}, otpw_triggered = {0}, driver_enabled = {0};
+#if TMC_POLL_STALLED
 static limits_get_state_ptr limits_get_state = NULL;
+#endif
 static limits_enable_ptr limits_enable = NULL;
 static stepper_pulse_start_ptr hal_stepper_pulse_start = NULL;
 static nvs_address_t nvs_address;
@@ -59,7 +62,6 @@ static on_report_options_ptr on_report_options;
 static driver_setup_ptr driver_setup;
 static settings_changed_ptr settings_changed;
 static trinamic_on_drivers_init_ptr on_drivers_init;
-static on_homing_rate_set_ptr on_homing_rate_set;
 static user_mcode_ptrs_t user_mcode;
 static trinamic_settings_t trinamic;
 static struct {
@@ -98,7 +100,6 @@ void trinamic_if_init (trinamic_driver_if_t *driver)
 static void trinamic_drivers_init (axes_signals_t axes);
 static void trinamic_settings_load (void);
 static void trinamic_settings_restore (void);
-static void trinamic_on_homing_rate_set(axes_signals_t cycle, float homing_rate);
 
 static status_code_t set_axis_setting (setting_id_t setting, uint_fast16_t value);
 static uint32_t get_axis_setting (setting_id_t setting);
@@ -117,16 +118,16 @@ static const setting_detail_t trinamic_settings[] = {
     { Setting_AxisStepperCurrent, Group_Axis0, "?-axis motor current", "mA", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL },
     { Setting_AxisMicroSteps, Group_Axis0, "?-axis microsteps", "steps", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL },
 #if TMC_STALLGUARD == 4
-    { Setting_AxisExtended0, Group_Axis0, "?-axis stallGuard4 threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
+    { Setting_AxisExtended0, Group_Axis0, "?-axis StallGuard4 fast threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
 #else
-    { Setting_AxisExtended0, Group_Axis0, "?-axis stallGuard2 threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
+    { Setting_AxisExtended0, Group_Axis0, "?-axis StallGuard2 fast threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
 #endif
     { Setting_AxisExtended1, Group_Axis0, "?-axis hold current", "%", Format_Int8, "##0", "5", "100", Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL },
 #if TMC_STALLGUARD == 4
-    { Setting_AxisExtended2, Group_Axis0, "?-axis homing feed stallGuard4 threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL }
+    { Setting_AxisExtended2, Group_Axis0, "?-axis StallGuard4 slow threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
 #else
-    { Setting_AxisExtended2, Group_Axis0, "?-axis homing feed stallGuard2 threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL }
-#endif  
+    { Setting_AxisExtended2, Group_Axis0, "?-axis stallGuard2 slow threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
+#endif
 };
 
 #ifndef NO_SETTINGS_DESCRIPTIONS
@@ -136,12 +137,13 @@ static const setting_descr_t trinamic_settings_descr[] = {
     { Setting_TrinamicDriver, "Enable SPI or UART controlled Trinamic drivers for axes." },
 #endif
     { Setting_TrinamicHoming, "Enable sensorless homing for axis. Requires SPI controlled Trinamic drivers." },
-    { Setting_AxisStepperCurrent, "Axis motor current in mA (RMS)." },
-    { Setting_AxisMicroSteps, "Axis microsteps per fullstep." },
-    { Setting_AxisExtended0, "Axis stallGuard threshold" },
-    { Setting_AxisExtended1, "Motor current at standstill as a percentage of full current.\n"
-                             "NOTE: if grblHAL is configured to disable motors on standstill this setting has no use." },
-    { Setting_AxisExtended2, "Axis stallGuard threshold for homing feed" }
+    { Setting_AxisStepperCurrent, "Motor current in mA (RMS)." },
+    { Setting_AxisMicroSteps, "Microsteps per fullstep." },
+    { Setting_AxisExtended0, "StallGuard threshold for fast (seek) homing phase." },
+    { Setting_AxisExtended2, "Motor current at standstill as a percentage of full current.\n"
+                             "NOTE: if grblHAL is configured to disable motors on standstill this setting has no use."
+    },
+    { Setting_AxisExtended2, "StallGuard threshold for slow (feed) homing phase." },
 };
 
 #endif
@@ -296,11 +298,11 @@ static status_code_t set_axis_setting_float (setting_id_t setting, float value)
     switch(settings_get_axis_base(setting, &idx)) {
 
         case Setting_AxisExtended0:
-            trinamic.driver[idx].homing_sensitivity = (int16_t)value;
+            trinamic.driver[idx].homing_seek_sensitivity = (int16_t)value;
             break;
 
         case Setting_AxisExtended2:
-            trinamic.driver[idx].homing_feed_sensitivity = (int16_t)value;
+            value = (float)trinamic.driver[idx].homing_feed_sensitivity;
             break;
 
         default:
@@ -320,7 +322,7 @@ static float get_axis_setting_float (setting_id_t setting)
     switch(settings_get_axis_base(setting, &idx)) {
 
         case Setting_AxisExtended0:
-            value = (float)trinamic.driver[idx].homing_sensitivity;
+            value = (float)trinamic.driver[idx].homing_seek_sensitivity;
             break;
 
         case Setting_AxisExtended2:
@@ -344,9 +346,9 @@ static void trinamic_settings_restore (void)
 
     do {
 
-        trinamic.driver[idx].mode = TMCMode_StealthChop;
+        trinamic.driver[--idx].mode = TMCMode_StealthChop;
 
-        switch(--idx) {
+        switch(idx) {
 
             case X_AXIS:
                 trinamic.driver_enable.x = TMC_X_ENABLE;
@@ -354,8 +356,8 @@ static void trinamic_settings_restore (void)
                 trinamic.driver[idx].hold_current_pct = TMC_X_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_X_MICROSTEPS;
                 trinamic.driver[idx].r_sense = TMC_X_R_SENSE;
-                trinamic.driver[idx].homing_sensitivity = TMC_X_SGT;
-                trinamic.driver[idx].homing_feed_sensitivity = TMC_X_HOME_FEED_SGT;
+                trinamic.driver[idx].homing_seek_sensitivity = TMC_X_HOMING_SEEK_SGT;
+                trinamic.driver[idx].homing_feed_sensitivity = TMC_X_HOMING_FEED_SGT;
                 break;
 
             case Y_AXIS:
@@ -364,8 +366,8 @@ static void trinamic_settings_restore (void)
                 trinamic.driver[idx].hold_current_pct = TMC_Y_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_Y_MICROSTEPS;
                 trinamic.driver[idx].r_sense = TMC_Y_R_SENSE;
-                trinamic.driver[idx].homing_sensitivity = TMC_Y_SGT;
-                trinamic.driver[idx].homing_feed_sensitivity = TMC_Y_HOME_FEED_SGT;
+                trinamic.driver[idx].homing_seek_sensitivity = TMC_Y_HOMING_SEEK_SGT;
+                trinamic.driver[idx].homing_feed_sensitivity = TMC_Y_HOMING_FEED_SGT;
                 break;
 
             case Z_AXIS:
@@ -374,8 +376,8 @@ static void trinamic_settings_restore (void)
                 trinamic.driver[idx].hold_current_pct = TMC_Z_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_Z_MICROSTEPS;
                 trinamic.driver[idx].r_sense = TMC_Z_R_SENSE;
-                trinamic.driver[idx].homing_sensitivity = TMC_Z_SGT;
-                trinamic.driver[idx].homing_feed_sensitivity = TMC_Z_HOME_FEED_SGT;
+                trinamic.driver[idx].homing_seek_sensitivity = TMC_Z_HOMING_SEEK_SGT;
+                trinamic.driver[idx].homing_feed_sensitivity = TMC_Z_HOMING_FEED_SGT;
                 break;
 
 #ifdef A_AXIS
@@ -385,8 +387,8 @@ static void trinamic_settings_restore (void)
                 trinamic.driver[idx].hold_current_pct = TMC_A_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_A_MICROSTEPS;
                 trinamic.driver[idx].r_sense = TMC_A_R_SENSE;
-                trinamic.driver[idx].homing_sensitivity = TMC_A_SGT;
-                trinamic.driver[idx].homing_feed_sensitivity = TMC_A_HOME_FEED_SGT;
+                trinamic.driver[idx].homing_seek_sensitivity = TMC_A_HOMING_SEEK_SGT;
+                trinamic.driver[idx].homing_feed_sensitivity = TMC_A_HOMING_FEED_SGT;
                 break;
 #endif
 
@@ -397,8 +399,8 @@ static void trinamic_settings_restore (void)
                 trinamic.driver[idx].hold_current_pct = TMC_B_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_B_MICROSTEPS;
                 trinamic.driver[idx].r_sense = TMC_B_R_SENSE;
-                trinamic.driver[idx].homing_sensitivity = TMC_B_SGT;
-                trinamic.driver[idx].homing_feed_sensitivity = TMC_B_HOME_FEED_SGT;
+                trinamic.driver[idx].homing_seek_sensitivity = TMC_B_HOMING_SEEK_SGT;
+                trinamic.driver[idx].homing_feed_sensitivity = TMC_B_HOMING_FEED_SGT;
                 break;
 #endif
 
@@ -409,8 +411,8 @@ static void trinamic_settings_restore (void)
                 trinamic.driver[idx].hold_current_pct = TMC_C_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_C_MICROSTEPS;
                 trinamic.driver[idx].r_sense = TMC_C_R_SENSE;
-                trinamic.driver[idx].homing_sensitivity = TMC_C_SGT;
-                trinamic.driver[idx].homing_feed_sensitivity = TMC_C_HOME_FEED_SGT;
+                trinamic.driver[idx].homing_seek_sensitivity = TMC_C_HOMING_SEEK_SGT;
+                trinamic.driver[idx].homing_feed_sensitivity = TMC_C_HOMING_FEED_SGT;
                 break;
 #endif
         }
@@ -430,15 +432,15 @@ static void trinamic_settings_load (void)
         uint_fast8_t idx = N_AXIS;
         do {
 #if TMC_STALLGUARD == 4
-            if(trinamic.driver[--idx].homing_sensitivity < 0)
-                trinamic.driver[idx].homing_sensitivity = 0;
-            if(trinamic.driver[idx].homing_feed_sensitivity < 0)
-                trinamic.driver[idx].homing_feed_sensitivity = 0;
+            if(trinamic.driver[--idx].homing_seek_sensitivity < 0)
+                trinamic.driver[idx].homing_seek_sensitivity = 0;
+            if(trinamic.driver[idx].homing_feed_sensitivity  < 0)
+                trinamic.driver[idx].homing_feed_sensitivity  = 0;
 #else
-            if(trinamic.driver[--idx].homing_sensitivity > 64)
-                trinamic.driver[idx].homing_sensitivity = 0;
-            if(trinamic.driver[--idx].homing_feed_sensitivity > 64)
-                trinamic.driver[idx].homing_feed_sensitivity = 0;
+            if(trinamic.driver[--idx].homing_seek_sensitivity > 64)
+                trinamic.driver[idx].homing_seek_sensitivity = 0;
+            if(trinamic.driver[idx].homing_feed_sensitivity  > 64)
+                trinamic.driver[idx].homing_feed_sensitivity  = 0;
 #endif
         } while(idx);
     }
@@ -710,7 +712,7 @@ static bool check_params (parser_block_t *gc_block)
         idx--;
         if(gc_block->words.mask & wordmap[idx].mask) {
             n_found++;
-            if(bit_istrue(driver_enabled.mask, bit(idx)) && !isnan(gc_block->values.xyz[idx])) {
+            if(bit_istrue(driver_enabled.mask, bit(idx)) && !isnanf(gc_block->values.xyz[idx])) {
                 n_ok++;
                 gc_block->words.mask &= ~wordmap[idx].mask;
             }
@@ -753,13 +755,13 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
             break;
 
         case Trinamic_WriteRegister:
-            if((*parameter_words).r && (*parameter_words).q) {
-                if(isnan(gc_block->values.r) || isnan(gc_block->values.q))
+            if(gc_block->words.r && gc_block->words.q) {
+                if(isnanf(gc_block->values.r) || isnanf(gc_block->values.q))
                     state = Status_BadNumberFormat;
                 else {
                     reg_ptr = TMC5160_GetRegPtr(&stepper[report.sg_status_motor], (tmc5160_regaddr_t)gc_block->values.r);
                     state = reg_ptr == NULL ? Status_GcodeValueOutOfRange : Status_OK;
-                    (*parameter_words).r = (*parameter_words).q = Off;
+                    gc_block->words.r = gc_block->words.q = Off;
                 }
             }
             break;
@@ -772,10 +774,10 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
             if(gc_block->words.h && gc_block->values.h > 1)
                 state = Status_BadNumberFormat;
 
-            if(gc_block->words.q && isnan(gc_block->values.q))
+            if(gc_block->words.q && isnanf(gc_block->values.q))
                 state = Status_BadNumberFormat;
 
-            if(gc_block->words.s && isnan(gc_block->values.s))
+            if(gc_block->words.s && isnanf(gc_block->values.s))
                 state = Status_BadNumberFormat;
 
             gc_block->words.h = gc_block->words.i = gc_block->words.q = gc_block->words.s =
@@ -819,15 +821,15 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
         case Trinamic_HomingSensitivity:
             if(check_params(gc_block)) {
                 uint_fast8_t idx = N_AXIS;
-                state = gc_block->words.i && (isnan(gc_block->values.ijk[0]) || gc_block->values.ijk[0] != 1.0f) ? Status_BadNumberFormat : Status_OK;
+                state = gc_block->words.i && (isnanf(gc_block->values.ijk[0]) || gc_block->values.ijk[0] != 1.0f) ? Status_BadNumberFormat : Status_OK;
                 gc_block->words.i = Off;
                 if(state == Status_OK) do {
                     idx--;
 #if TMC_STALLGUARD == 4
-                    if(!isnan(gc_block->values.xyz[idx]) && (gc_block->values.xyz[idx] < 0.0f || gc_block->values.xyz[idx] > 255.0f))
+                    if(!isnanf(gc_block->values.xyz[idx]) && (gc_block->values.xyz[idx] < 0.0f || gc_block->values.xyz[idx] > 255.0f))
                         state = Status_BadNumberFormat;
 #else
-                    if(!isnan(gc_block->values.xyz[idx]) && (gc_block->values.xyz[idx] < -64.0f || gc_block->values.xyz[idx] > 63.0f))
+                    if(!isnanf(gc_block->values.xyz[idx]) && (gc_block->values.xyz[idx] < -64.0f || gc_block->values.xyz[idx] > 63.0f))
                         state = Status_BadNumberFormat;
 #endif
                 } while(idx && state == Status_OK);
@@ -937,11 +939,10 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                             hal_stepper_pulse_start = hal.stepper.pulse_start;
                             hal.stepper.pulse_start = stepper_pulse_start;
                         }
-                        stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[motor].steps_per_mm, trinamic.driver[motor].homing_sensitivity);
+                        stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[motor].steps_per_mm, trinamic.driver[motor].homing_seek_sensitivity);
                         stepper[motor]->sg_filter(motor, report.sfilt);
                         if(stepper[motor]->set_thigh_raw) // TODO: TMC2209 do not have this...
                             stepper[motor]->set_thigh_raw(motor, 0);
-                        stepper[motor]->set_tcoolthrs_raw(motor, 0xFFFFF);
                     } else if(hal_stepper_pulse_start != NULL) {
                         hal.stepper.pulse_start = hal_stepper_pulse_start;
                         hal_stepper_pulse_start = NULL;
@@ -954,9 +955,9 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
         case Trinamic_StepperCurrent:
             do {
-                if(!isnan(gc_block->values.xyz[motor_map[--motor].axis]))
+                if(!isnanf(gc_block->values.xyz[motor_map[--motor].axis]))
                     stepper[motor]->set_current(motor, (uint16_t)gc_block->values.xyz[motor_map[motor].axis],
-                                                      isnan(gc_block->values.q) ? trinamic.driver[motor_map[motor].axis].hold_current_pct : (uint8_t)gc_block->values.q);
+                                                      isnanf(gc_block->values.q) ? trinamic.driver[motor_map[motor].axis].hold_current_pct : (uint8_t)gc_block->values.q);
             } while(motor);
             break;
 
@@ -995,7 +996,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                 uint_fast8_t axis;
                 do {
                     axis = motor_map[--motor].axis;
-                    if(!isnan(gc_block->values.xyz[axis])) // mm/min
+                    if(!isnanf(gc_block->values.xyz[axis])) // mm/min
                         stepper[motor]->set_tpwmthrs(motor, gc_block->values.xyz[axis] / 60.0f, settings.axis[axis].steps_per_mm);
                 } while(motor);
             }
@@ -1006,10 +1007,10 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                 uint_fast8_t axis;
                 do {
                     axis = motor_map[--motor].axis;
-                    if(!isnan(gc_block->values.xyz[axis])) {
-                        trinamic.driver[axis].homing_sensitivity = (int16_t)gc_block->values.xyz[axis];
+                    if(!isnanf(gc_block->values.xyz[axis])) {
+                        trinamic.driver[axis].homing_seek_sensitivity = (int16_t)gc_block->values.xyz[axis];
                         stepper[motor]->sg_filter(motor, report.sfilt);
-                        stepper[motor]->sg_stall_value(motor, trinamic.driver[axis].homing_sensitivity);
+                        stepper[motor]->sg_stall_value(motor, trinamic.driver[axis].homing_seek_sensitivity);
                     }
                 } while(motor);
             }
@@ -1025,6 +1026,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 }
 
 #if TRINAMIC_I2C
+
 static void trinamic_stepper_enable (axes_signals_t enable)
 {
     enable.mask ^= settings.steppers.enable_invert.mask;
@@ -1033,7 +1035,10 @@ static void trinamic_stepper_enable (axes_signals_t enable)
 
     tmc_spi_write((trinamic_motor_t){0}, (TMC_spi_datagram_t *)&dgr_enable);
 }
+
 #endif
+
+#if TMC_POLL_STALLED
 
 // hal.limits.get_state is redirected here when homing
 static limit_signals_t trinamic_limits (void)
@@ -1061,10 +1066,40 @@ static limit_signals_t trinamic_limits (void)
     return signals;
 }
 
+#endif
+
 // Configure sensorless homing for enabled axes
-static void trinamic_homing (bool on, bool enable)
+static void trinamic_on_homing (axes_signals_t axes, float rate, bool pulloff)
 {
     uint_fast8_t motor = n_motors, axis;
+
+    axes.mask = driver_enabled.mask & trinamic.homing_enable.mask;
+
+    if(axes.mask) do {
+        axis = motor_map[--motor].axis;
+        if(bit_istrue(axes.mask, bit(axis))) {
+            if(pulloff) {
+                current_homing_rate = 0.0f;
+                if(trinamic.driver[motor].mode == TMCMode_StealthChop)
+                    stepper[motor]->stealthchop_enable(motor);
+                else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
+                    stepper[motor]->coolstep_enable(motor);
+            } else if(current_homing_rate != rate) {
+                if(rate == settings.homing.feed_rate)
+                    stepper[motor]->stallguard_enable(motor, rate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_feed_sensitivity);
+                else
+                    stepper[motor]->stallguard_enable(motor, rate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_seek_sensitivity);
+            }
+        }
+    } while(motor);
+}
+
+// Enable/disable sensorless homing
+static void trinamic_homing (bool on, bool enable)
+{
+#ifdef TMC_HOMING_ACCELERATION
+    static float accel[N_AXIS];
+#endif
 
     if(limits_enable)
         limits_enable(on, enable);
@@ -1074,27 +1109,54 @@ static void trinamic_homing (bool on, bool enable)
     is_homing = enable;
     enable = enable && homing.mask;
 
-    do {
-        axis = motor_map[--motor].axis;
-        if(bit_istrue(driver_enabled.mask, bit(axis))) {
-            if(bit_istrue(homing.mask, bit(axis)))
-                stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_sensitivity);
-            else if(trinamic.driver[motor].mode == TMCMode_StealthChop)
-                stepper[motor]->stealthchop_enable(motor);
-            else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
-                stepper[motor]->coolstep_enable(motor);
-        }
-    } while(motor);
-
     if(enable) {
+
+        current_homing_rate = 0.0f;
+        grbl.on_homing_rate_set = trinamic_on_homing;
+
+#ifdef TMC_HOMING_ACCELERATION
+        uint_fast8_t axis = 0, axes = homing.mask;
+        while(axes) {
+            if(axes & 1 && accel[axis] == 0.0f) {
+                accel[axis] = settings.axis[axis].acceleration / (60.0f * 60.0f);
+                settings_override_acceleration(axis, min(TMC_HOMING_ACCELERATION, accel[axis]));
+            }
+            axes >>= 1;
+            axis++;
+        }
+#endif
+#if TMC_POLL_STALLED
         if(limits_get_state == NULL) {
             limits_get_state = hal.limits.get_state;
             hal.limits.get_state = trinamic_limits;
         }
         diag1_poll = 0;
-    } else if(limits_get_state != NULL) {
-        hal.limits.get_state = limits_get_state;
-        limits_get_state = NULL;
+#endif
+    } else {
+
+        uint_fast8_t motor = n_motors, axis;
+
+        do {
+            axis = motor_map[--motor].axis;
+            if(bit_istrue(driver_enabled.mask, bit(axis))) {
+                if(trinamic.driver[motor].mode == TMCMode_StealthChop)
+                    stepper[motor]->stealthchop_enable(motor);
+                else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
+                    stepper[motor]->coolstep_enable(motor);
+#ifdef TMC_HOMING_ACCELERATION
+                if(accel[axis] > 0.0f) {
+                    settings_override_acceleration(axis, accel[axis]);
+                    accel[axis] = 0.0f;
+                }
+#endif
+            }
+        } while(motor);
+#if TMC_POLL_STALLED
+        if(limits_get_state != NULL) {
+            hal.limits.get_state = limits_get_state;
+            limits_get_state = NULL;
+        }
+#endif
     }
 }
 
@@ -1466,14 +1528,13 @@ bool trinamic_init (void)
     } else {
         motor_map = malloc(N_AXIS * sizeof(motor_map_t));
         if(motor_map) {
-
-        uint_fast8_t idx;
-//        n_motors = N_AXIS;
-        for(idx = 0; idx < N_AXIS; idx++) {
-            motor_map[idx].id = idx;
-            motor_map[idx].axis = idx;
-        }
-        n_motors = idx;
+            uint_fast8_t idx;
+    //        n_motors = N_AXIS;
+            for(idx = 0; idx < N_AXIS; idx++) {
+                motor_map[idx].id = idx;
+                motor_map[idx].axis = idx;
+            }
+            n_motors = idx;
         }
     }
 
@@ -1502,9 +1563,6 @@ bool trinamic_init (void)
 
         limits_enable = hal.limits.enable;
         hal.limits.enable = trinamic_homing;
-
-        on_homing_rate_set = grbl.on_homing_rate_set;
-        grbl.on_homing_rate_set = trinamic_on_homing_rate_set;
 
 #if TRINAMIC_I2C
         stepper_enable = hal.stepper.enable;
@@ -1536,54 +1594,4 @@ void trinamic_warn_handler (void)
 }
 #endif
 
-static void trinamic_on_homing_rate_set(axes_signals_t cycle, float homing_rate)
-{
-    static float current_homing_rate = 0;
-
-    if(homing_rate != current_homing_rate) {
-        current_homing_rate = homing_rate;
-
-        if(homing_rate == settings.homing.feed_rate) {
-            if(cycle.x)
-                stepper[X_AXIS]->sg_stall_value(X_AXIS, trinamic.driver[X_AXIS].homing_feed_sensitivity);
-            if(cycle.y)
-                stepper[Y_AXIS]->sg_stall_value(Y_AXIS, trinamic.driver[Y_AXIS].homing_feed_sensitivity);
-            if(cycle.z)
-                stepper[Z_AXIS]->sg_stall_value(Z_AXIS, trinamic.driver[Z_AXIS].homing_feed_sensitivity);
-#if N_AXIS > 3
-            if(cycle.a)
-                stepper[A_AXIS]->sg_stall_value(A_AXIS, trinamic.driver[A_AXIS].homing_feed_sensitivity);
-#endif
-#if N_AXIS > 4
-            if(cycle.b)
-                stepper[B_AXIS]->sg_stall_value(B_AXIS, trinamic.driver[B_AXIS].homing_feed_sensitivity);
-#endif
-#if N_AXIS > 5
-            if(cycle.c)
-                stepper[C_AXIS]->sg_stall_value(C_AXIS, trinamic.driver[C_AXIS].homing_feed_sensitivity);
-#endif
-        } else {
-            if(cycle.x)
-                stepper[X_AXIS]->sg_stall_value(X_AXIS, trinamic.driver[X_AXIS].homing_sensitivity);
-            if(cycle.y)
-                stepper[Y_AXIS]->sg_stall_value(Y_AXIS, trinamic.driver[Y_AXIS].homing_sensitivity);
-            if(cycle.z)
-                stepper[Z_AXIS]->sg_stall_value(Z_AXIS, trinamic.driver[Z_AXIS].homing_sensitivity);
-#if N_AXIS > 3
-            if(cycle.a)
-                stepper[A_AXIS]->sg_stall_value(A_AXIS, trinamic.driver[A_AXIS].homing_sensitivity);
-#endif
-#if N_AXIS > 4
-            if(cycle.b)
-                stepper[B_AXIS]->sg_stall_value(B_AXIS, trinamic.driver[B_AXIS].homing_sensitivity);
-#endif
-#if N_AXIS > 5
-            if(cycle.c)
-                stepper[C_AXIS]->sg_stall_value(C_AXIS, trinamic.driver[C_AXIS].homing_sensitivity);
-#endif
-        }
-    }
-    if(on_homing_rate_set)
-        on_homing_rate_set(cycle, homing_rate);
-}
 #endif
