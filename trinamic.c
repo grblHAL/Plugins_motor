@@ -140,7 +140,7 @@ static const setting_descr_t trinamic_settings_descr[] = {
     { Setting_AxisStepperCurrent, "Motor current in mA (RMS)." },
     { Setting_AxisMicroSteps, "Microsteps per fullstep." },
     { Setting_AxisExtended0, "StallGuard threshold for fast (seek) homing phase." },
-    { Setting_AxisExtended2, "Motor current at standstill as a percentage of full current.\n"
+    { Setting_AxisExtended1, "Motor current at standstill as a percentage of full current.\n"
                              "NOTE: if grblHAL is configured to disable motors on standstill this setting has no use."
     },
     { Setting_AxisExtended2, "StallGuard threshold for slow (feed) homing phase." },
@@ -302,7 +302,7 @@ static status_code_t set_axis_setting_float (setting_id_t setting, float value)
             break;
 
         case Setting_AxisExtended2:
-            value = (float)trinamic.driver[idx].homing_feed_sensitivity;
+            trinamic.driver[idx].homing_feed_sensitivity = (int16_t)value;
             break;
 
         default:
