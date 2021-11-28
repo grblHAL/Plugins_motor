@@ -61,9 +61,10 @@ static on_realtime_report_ptr on_realtime_report;
 static on_report_options_ptr on_report_options;
 static driver_setup_ptr driver_setup;
 static settings_changed_ptr settings_changed;
-static trinamic_on_drivers_init_ptr on_drivers_init;
 static user_mcode_ptrs_t user_mcode;
+static trinamic_driver_if_t driver_if = {0};
 static trinamic_settings_t trinamic;
+
 static struct {
     bool raw;
     bool sg_status_enable;
@@ -92,7 +93,7 @@ static void write_debug_report (uint_fast8_t axes);
 // Wrapper for initializing physical interface
 void trinamic_if_init (trinamic_driver_if_t *driver)
 {
-    on_drivers_init = driver->on_drivers_init;
+    memcpy(&driver_if, driver, sizeof(trinamic_driver_if_t));
 }
 
 #if 1 // Region settings
@@ -153,7 +154,7 @@ static void trinamic_settings_save (void)
     hal.nvs.memcpy_to_nvs(nvs_address, (uint8_t *)&trinamic, sizeof(trinamic_settings_t), true);
 }
 
-static setting_details_t details = {
+static setting_details_t settings_details = {
     .settings = trinamic_settings,
     .n_settings = sizeof(trinamic_settings) / sizeof(setting_detail_t),
 #ifndef NO_SETTINGS_DESCRIPTIONS
@@ -165,14 +166,9 @@ static setting_details_t details = {
     .restore = trinamic_settings_restore
 };
 
-static setting_details_t *on_get_settings (void)
-{
-    return &details;
-}
-
 static void trinamic_drivers_setup (void)
 {
-    if(on_drivers_init) {
+    if(driver_if.on_drivers_init) {
 
         uint8_t n_enabled = 0, motor = n_motors;
 
@@ -181,7 +177,7 @@ static void trinamic_drivers_setup (void)
                 n_enabled++;
         } while(motor);
 
-        on_drivers_init(n_enabled, trinamic.driver_enable);
+        driver_if.on_drivers_init(n_enabled, trinamic.driver_enable);
     }
 
     trinamic_drivers_init(trinamic.driver_enable);
@@ -495,13 +491,20 @@ static void pos_failed (sys_state_t state)
 static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
 {
     bool ok = false;
+    trinamic_driver_config_t cfg = {
+        .address = motor.id,
+        .settings = &trinamic.driver[motor.axis]
+    };
+
+    if(driver_if.on_driver_preinit)
+        driver_if.on_driver_preinit(motor, &cfg);
 
     #if TRINAMIC_ENABLE == 2209
-        ok = (stepper[motor.id] = TMC2209_AddMotor(motor, trinamic.driver[motor.axis].current, trinamic.driver[motor.axis].microsteps, trinamic.driver[motor.axis].r_sense)) != NULL;
+        ok = (stepper[motor.id] = TMC2209_AddMotor(motor, cfg.address, cfg.settings->current, cfg.settings->microsteps, cfg.settings->r_sense)) != NULL;
     #elif TRINAMIC_ENABLE == 2130
-        ok = (stepper[motor.id] = TMC2130_AddMotor(motor, trinamic.driver[motor.axis].current, trinamic.driver[motor.axis].microsteps, trinamic.driver[motor.axis].r_sense)) != NULL;
+        ok = (stepper[motor.id] = TMC2130_AddMotor(motor, cfg.settings->current, cfg.settings->microsteps, cfg.settings->r_sense)) != NULL;
     #elif TRINAMIC_ENABLE == 5160
-        ok = (stepper[motor.id] = TMC5160_AddMotor(motor, trinamic.driver[motor.axis].current, trinamic.driver[motor.axis].microsteps, trinamic.driver[motor.axis].r_sense)) != NULL;
+        ok = (stepper[motor.id] = TMC5160_AddMotor(motor, cfg.settings->current, cfg.settings->microsteps, cfg.settings->r_sense)) != NULL;
     #endif
 
     if(!ok) {
@@ -530,7 +533,7 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
             TMC_Y_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_Y_MONITOR
-            dgr_enable.reg.monitor.x = TMC_Y_MONITOR;
+            dgr_enable.reg.monitor.y = TMC_Y_MONITOR;
           #endif
             break;
 
@@ -539,7 +542,7 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
             TMC_Z_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_Z_MONITOR
-            dgr_enable.reg.monitor.x = TMC_Z_MONITOR;
+            dgr_enable.reg.monitor.z = TMC_Z_MONITOR;
           #endif
             break;
 
@@ -549,7 +552,7 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
             TMC_A_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_A_MONITOR
-            dgr_enable.reg.monitor.x = TMC_A_MONITOR;
+            dgr_enable.reg.monitor.a = TMC_A_MONITOR;
           #endif
             break;
 #endif
@@ -560,7 +563,7 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
             TMC_B_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_B_MONITOR
-            dgr_enable.reg.monitor.x = TMC_B_MONITOR;
+            dgr_enable.reg.monitor.b = TMC_B_MONITOR;
           #endif
             break;
 #endif
@@ -571,20 +574,23 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
             TMC_C_ADVANCED(motor.id)
           #endif
           #if TRINAMIC_I2C && TMC_C_MONITOR
-            dgr_enable.reg.monitor.x = TMC_C_MONITOR;
+            dgr_enable.reg.monitor.c = TMC_C_MONITOR;
           #endif
             break;
 #endif
     }
 
 #if PWM_THRESHOLD_VELOCITY > 0
-    stepper[motor.id]->set_tpwmthrs(motor.id, (float)PWM_THRESHOLD_VELOCITY / 60.0f, settings.axis[motor.axis].steps_per_mm);
+    stepper[motor.id]->set_tpwmthrs(motor.id, (float)PWM_THRESHOLD_VELOCITY / 60.0f, cfg.settings->steps_per_mm);
 #endif
-    stepper[motor.id]->set_current(motor.id, trinamic.driver[motor.axis].current, trinamic.driver[motor.axis].hold_current_pct);
-    stepper[motor.id]->set_microsteps(motor.id, trinamic.driver[motor.axis].microsteps);
+    stepper[motor.id]->set_current(motor.id, cfg.settings->current, cfg.settings->hold_current_pct);
+    stepper[motor.id]->set_microsteps(motor.id, cfg.settings->microsteps);
 #if TRINAMIC_I2C
     tmc_spi_write((trinamic_motor_t){0}, (TMC_spi_datagram_t *)&dgr_enable);
 #endif
+
+    if(driver_if.on_driver_postinit)
+        driver_if.on_driver_postinit(motor, stepper[motor.id]);
 
     return true;
 }
@@ -592,13 +598,19 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
 static void trinamic_drivers_init (axes_signals_t axes)
 {
     bool ok = axes.value != 0;
-    uint_fast8_t motor = n_motors, n_enabled = 0;
+    uint_fast8_t motor = n_motors, n_enabled = 0, seq = 0;
 
     memset(stepper, 0, sizeof(stepper));
 
     do {
+        if(bit_istrue(axes.mask, bit(motor_map[--motor].axis)))
+            seq++;
+    } while(motor);
+
+    motor = n_motors;
+    do {
         if(bit_istrue(axes.mask, bit(motor_map[--motor].axis))) {
-            if((ok = trinamic_driver_config(motor_map[motor], motor)))
+            if((ok = trinamic_driver_config(motor_map[motor], --seq)))
                 n_enabled++;
         }
     } while(ok && motor);
@@ -911,12 +923,14 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
                 if(!write_report) {
 
-                    motor = report.sg_status_motor;
-
-                    if(trinamic.driver[motor].mode == TMCMode_StealthChop)
-                        stepper[motor]->stealthchop_enable(motor);
-                    else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
-                        stepper[motor]->coolstep_enable(motor);
+                    do {
+                        if(motor_map[--motor].axis == report.sg_status_motor) {
+                            if(trinamic.driver[motor].mode == TMCMode_StealthChop)
+                                stepper[motor]->stealthchop_enable(motor);
+                            else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
+                                stepper[motor]->coolstep_enable(motor);
+                        }
+                    } while(motor);
 
                     if(axes.mask) {
                         uint32_t axis = 0, mask = axes.mask;
@@ -930,19 +944,24 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                         }
                     }
 
-                    motor = report.sg_status_motor;
-
                     if(report.sg_status_enable) {
+
                         report.sg_status_motormask.mask = 1 << report.sg_status_motor;
                         report.msteps = trinamic.driver[report.sg_status_motor].microsteps;
                         if(hal_stepper_pulse_start == NULL) {
                             hal_stepper_pulse_start = hal.stepper.pulse_start;
                             hal.stepper.pulse_start = stepper_pulse_start;
                         }
-                        stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[motor].steps_per_mm, trinamic.driver[motor].homing_seek_sensitivity);
-                        stepper[motor]->sg_filter(motor, report.sfilt);
-                        if(stepper[motor]->set_thigh_raw) // TODO: TMC2209 do not have this...
-                            stepper[motor]->set_thigh_raw(motor, 0);
+
+                        motor = n_motors;
+                        do {
+                            if(motor_map[--motor].axis == report.sg_status_motor) {
+                                stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[motor_map[motor].axis].steps_per_mm, trinamic.driver[motor_map[motor].axis].homing_seek_sensitivity);
+                                stepper[motor]->sg_filter(motor, report.sfilt);
+                                if(stepper[motor]->set_thigh_raw) // TODO: TMC2209 do not have this...
+                                    stepper[motor]->set_thigh_raw(motor, 0);
+                            }
+                        } while(motor);
                     } else if(hal_stepper_pulse_start != NULL) {
                         hal.stepper.pulse_start = hal_stepper_pulse_start;
                         hal_stepper_pulse_start = NULL;
@@ -1490,7 +1509,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.06]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.07]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
@@ -1552,9 +1571,6 @@ bool trinamic_init (void)
         on_report_options = grbl.on_report_options;
         grbl.on_report_options = onReportOptions;
 
-        details.on_get_settings = grbl.on_get_settings;
-        grbl.on_get_settings = on_get_settings;
-
         driver_setup = hal.driver_setup;
         hal.driver_setup = on_driver_setup;
 
@@ -1563,6 +1579,8 @@ bool trinamic_init (void)
 
         limits_enable = hal.limits.enable;
         hal.limits.enable = trinamic_homing;
+
+        settings_register(&settings_details);
 
 #if TRINAMIC_I2C
         stepper_enable = hal.stepper.enable;

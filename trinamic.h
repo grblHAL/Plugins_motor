@@ -215,10 +215,19 @@ typedef struct {
     motor_settings_t driver[N_AXIS];
 } trinamic_settings_t;
 
+typedef struct {
+    uint8_t address;            // slave address, for UART Single Wire Interface drivers - can be overridden by driver interface
+    motor_settings_t *settings; // for info only, do not modify
+} trinamic_driver_config_t;
+
 typedef void (*trinamic_on_drivers_init_ptr)(uint8_t n_motors, axes_signals_t enabled);
+typedef void (*trinamic_on_driver_preinit_ptr)(motor_map_t motor, trinamic_driver_config_t *config);
+typedef void (*trinamic_on_driver_postinit_ptr)(motor_map_t motor, const tmchal_t *driver);
 
 typedef struct {
     trinamic_on_drivers_init_ptr on_drivers_init;
+    trinamic_on_driver_preinit_ptr on_driver_preinit;
+    trinamic_on_driver_postinit_ptr on_driver_postinit;
 } trinamic_driver_if_t;
 
 bool trinamic_init (void);
