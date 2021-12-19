@@ -60,9 +60,9 @@
 #endif
 
 #if TRINAMIC_ENABLE == 2209
-#define TMC_STALLGUARD 4
+#define TMC_STALLGUARD 4 // Do not change!
 #else
-#define TMC_STALLGUARD 2
+#define TMC_STALLGUARD 2 // Do not change!
 #endif
 
 //#define TMC_HOMING_ACCELERATION 50.0f // NOT tested... Reduce acceleration during homing to avoid falsely triggering DIAG output
@@ -83,9 +83,9 @@ static const TMC_chopper_timing_t chopper_timing = { .hstrt = 1, .hend = -1, .tb
 #define TMC_X_HOLD_CURRENT_PCT 50
 #define TMC_X_HOMING_SEEK_SGT 22
 #define TMC_X_HOMING_FEED_SGT 22
+#define TMC_X_STEALTHCHOP TMC_STEALTHCHOP
 
 #define TMC_X_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
 stepper[motor]->coolconf(motor, coolconf); \
 stepper[motor]->chopper_timing(motor, chopper_timing);
@@ -102,9 +102,9 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #define TMC_Y_HOLD_CURRENT_PCT 50
 #define TMC_Y_HOMING_SEEK_SGT 22
 #define TMC_Y_HOMING_FEED_SGT 22
+#define TMC_Y_STEALTHCHOP TMC_STEALTHCHOP
 
 #define TMC_Y_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
 stepper[motor]->coolconf(motor, coolconf); \
 stepper[motor]->chopper_timing(motor, chopper_timing);
@@ -121,9 +121,9 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #define TMC_Z_HOLD_CURRENT_PCT 50
 #define TMC_Z_HOMING_SEEK_SGT 22
 #define TMC_Z_HOMING_FEED_SGT 22
+#define TMC_Z_STEALTHCHOP TMC_STEALTHCHOP
 
 #define TMC_Z_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
 stepper[motor]->coolconf(motor, coolconf); \
 stepper[motor]->chopper_timing(motor, chopper_timing);
@@ -142,9 +142,9 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #define TMC_A_HOLD_CURRENT_PCT 50
 #define TMC_A_HOMING_SEEK_SGT 22
 #define TMC_A_HOMING_FEED_SGT 22
+#define TMC_A_STEALTHCHOP TMC_STEALTHCHOP
 
 #define TMC_A_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
 stepper[motor]->coolconf(motor, coolconf); \
 stepper[motor]->chopper_timing(motor, chopper_timing);
@@ -165,9 +165,9 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #define TMC_B_HOLD_CURRENT_PCT 50
 #define TMC_B_HOMING_SEEK_SGT 22
 #define TMC_B_HOMING_FEED_SGT 22
+#define TMC_B_STEALTHCHOP TMC_STEALTHCHOP
 
 #define TMC_B_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
 stepper[motor]->coolconf(motor, coolconf); \
 stepper[motor]->chopper_timing(motor, chopper_timing);
@@ -188,9 +188,9 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #define TMC_C_HOLD_CURRENT_PCT 50
 #define TMC_C_HOMING_SEEK_SGT 22
 #define TMC_C_HOMING_FEED_SGT 22
+#define TMC_C_STEALTHCHOP TMC_STEALTHCHOP
 
 #define TMC_C_ADVANCED(motor) \
-stepper[motor]->stealthChop(motor, TMC_STEALTHCHOP); \
 stepper[motor]->sg_filter(motor, 1); \
 stepper[motor]->coolconf(motor, coolconf); \
 stepper[motor]->chopper_timing(motor, chopper_timing);

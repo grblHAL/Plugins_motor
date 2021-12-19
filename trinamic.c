@@ -241,7 +241,7 @@ static status_code_t set_axis_setting (setting_id_t setting, uint_fast16_t value
                         trinamic.driver[axis].microsteps = value;
                         stepper[motor]->set_microsteps(motor, trinamic.driver[axis].microsteps);
                         if(report.sg_status_motormask.mask & bit(axis))
-                            report.msteps = trinamic.driver[motor].microsteps;
+                            report.msteps = trinamic.driver[axis].microsteps;
                     } else {
                         status = Status_InvalidStatement;
                         break;
@@ -342,11 +342,14 @@ static void trinamic_settings_restore (void)
 
     do {
 
-        trinamic.driver[--idx].mode = TMCMode_StealthChop;
-
-        switch(idx) {
+        switch(--idx) {
 
             case X_AXIS:
+#if TMC_X_STEALTHCHOP
+                trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
                 trinamic.driver_enable.x = TMC_X_ENABLE;
                 trinamic.driver[idx].current = TMC_X_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_X_HOLD_CURRENT_PCT;
@@ -357,6 +360,11 @@ static void trinamic_settings_restore (void)
                 break;
 
             case Y_AXIS:
+#if TMC_Y_STEALTHCHOP
+                trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
                 trinamic.driver_enable.y = TMC_Y_ENABLE;
                 trinamic.driver[idx].current = TMC_Y_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_Y_HOLD_CURRENT_PCT;
@@ -367,6 +375,11 @@ static void trinamic_settings_restore (void)
                 break;
 
             case Z_AXIS:
+#if TMC_Z_STEALTHCHOP
+                trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
                 trinamic.driver_enable.z = TMC_Z_ENABLE;
                 trinamic.driver[idx].current = TMC_Z_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_Z_HOLD_CURRENT_PCT;
@@ -378,6 +391,11 @@ static void trinamic_settings_restore (void)
 
 #ifdef A_AXIS
             case A_AXIS:
+#if TMC_A_STEALTHCHOP
+                trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
                 trinamic.driver_enable.z = TMC_A_ENABLE;
                 trinamic.driver[idx].current = TMC_A_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_A_HOLD_CURRENT_PCT;
@@ -390,6 +408,11 @@ static void trinamic_settings_restore (void)
 
 #ifdef B_AXIS
             case B_AXIS:
+#if TMC_B_STEALTHCHOP
+                trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
                 trinamic.driver_enable.z = TMC_B_ENABLE;
                 trinamic.driver[idx].current = TMC_B_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_B_HOLD_CURRENT_PCT;
@@ -402,6 +425,11 @@ static void trinamic_settings_restore (void)
 
 #ifdef C_AXIS
             case C_AXIS:
+#if TMC_C_STEALTHCHOP
+                trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
                 trinamic.driver_enable.z = TMC_C_ENABLE;
                 trinamic.driver[idx].current = TMC_C_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_C_HOLD_CURRENT_PCT;
@@ -438,6 +466,62 @@ static void trinamic_settings_load (void)
             if(trinamic.driver[idx].homing_feed_sensitivity  > 64)
                 trinamic.driver[idx].homing_feed_sensitivity  = 0;
 #endif
+// Until $-setting is added set from mode from defines
+            switch(idx) {
+                case X_AXIS:
+#if TMC_X_STEALTHCHOP
+                    trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                    trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
+                    break;
+                case Y_AXIS:
+#if TMC_Y_STEALTHCHOP
+                    trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                    trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
+                    break;
+                case Z_AXIS:
+#if TMC_Z_STEALTHCHOP
+                    trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                    trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
+
+                    break;
+#ifdef A_AXIS
+                case A_AXIS:
+#if TMC_A_STEALTHCHOP
+                    trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                    trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
+
+                    break;
+#endif
+#ifdef B_AXIS
+                case B_AXIS:
+#if TMC_B_STEALTHCHOP
+                    trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                    trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
+
+                    break;
+#endif
+#ifdef C_AXIS
+                case C_AXIS:
+#if TMC_C_STEALTHCHOP
+                    trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                    trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
+
+                    break;
+#endif
+            }
+//
         } while(idx);
     }
 
@@ -579,6 +663,8 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
             break;
 #endif
     }
+
+    stepper[motor.id]->stealthChop(motor.id, cfg.settings->mode == TMCMode_StealthChop);
 
 #if PWM_THRESHOLD_VELOCITY > 0
     stepper[motor.id]->set_tpwmthrs(motor.id, (float)PWM_THRESHOLD_VELOCITY / 60.0f, cfg.settings->steps_per_mm);
@@ -880,7 +966,10 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
         case Trinamic_DebugReport:
             {
                 if(driver_enabled.mask != trinamic.driver_enable.mask) {
-                    pos_failed(state_get());
+                    if(gc_block->words.i)
+                        trinamic_drivers_init(trinamic.driver_enable);
+                    else
+                        pos_failed(state_get());
                     return;
                 }
 
@@ -923,9 +1012,11 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
                 if(!write_report) {
 
+                    uint_fast16_t axis;
+
                     do {
-                        if(motor_map[--motor].axis == report.sg_status_motor) {
-                            if(trinamic.driver[motor].mode == TMCMode_StealthChop)
+                        if((axis = motor_map[--motor].axis) == report.sg_status_motor) {
+                            if(trinamic.driver[axis].mode == TMCMode_StealthChop)
                                 stepper[motor]->stealthchop_enable(motor);
                             else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
                                 stepper[motor]->coolstep_enable(motor);
@@ -933,7 +1024,8 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                     } while(motor);
 
                     if(axes.mask) {
-                        uint32_t axis = 0, mask = axes.mask;
+                        uint_fast16_t mask = axes.mask;
+                        axis = 0;
                         while(mask) {
                             if(mask & 0x01) {
                                 report.sg_status_motor = axis;
@@ -955,8 +1047,8 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
                         motor = n_motors;
                         do {
-                            if(motor_map[--motor].axis == report.sg_status_motor) {
-                                stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[motor_map[motor].axis].steps_per_mm, trinamic.driver[motor_map[motor].axis].homing_seek_sensitivity);
+                            if((axis = motor_map[--motor].axis) == report.sg_status_motor) {
+                                stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[axis].steps_per_mm, trinamic.driver[motor_map[motor].axis].homing_seek_sensitivity);
                                 stepper[motor]->sg_filter(motor, report.sfilt);
                                 if(stepper[motor]->set_thigh_raw) // TODO: TMC2209 do not have this...
                                     stepper[motor]->set_thigh_raw(motor, 0);
@@ -1099,9 +1191,9 @@ static void trinamic_on_homing (axes_signals_t axes, float rate, bool pulloff)
         if(bit_istrue(axes.mask, bit(axis))) {
             if(pulloff) {
                 current_homing_rate = 0.0f;
-                if(trinamic.driver[motor].mode == TMCMode_StealthChop)
+                if(trinamic.driver[axis].mode == TMCMode_StealthChop)
                     stepper[motor]->stealthchop_enable(motor);
-                else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
+                else if(trinamic.driver[axis].mode == TMCMode_CoolStep)
                     stepper[motor]->coolstep_enable(motor);
             } else if(current_homing_rate != rate) {
                 if(rate == settings.homing.feed_rate)
@@ -1158,9 +1250,9 @@ static void trinamic_homing (bool on, bool enable)
         do {
             axis = motor_map[--motor].axis;
             if(bit_istrue(driver_enabled.mask, bit(axis))) {
-                if(trinamic.driver[motor].mode == TMCMode_StealthChop)
+                if(trinamic.driver[axis].mode == TMCMode_StealthChop)
                     stepper[motor]->stealthchop_enable(motor);
-                else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
+                else if(trinamic.driver[axis].mode == TMCMode_CoolStep)
                     stepper[motor]->coolstep_enable(motor);
 #ifdef TMC_HOMING_ACCELERATION
                 if(accel[axis] > 0.0f) {
@@ -1509,7 +1601,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.07]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.08]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
