@@ -68,13 +68,13 @@ Valid values are 1, 2, 4, , 8, 16, 32, 64, 128 and 256.
 
 #### $338 - Driver enable
 
-Parameter is a axismask where value is sum of X=0, Y=1, Z=2 etc.
+Parameter is a axismask where value is sum of X=1, Y=2, Z=4 etc.
 
 __NOTE__: Some boards does not allow mixed drivers, for these this setting is not available.
 
 #### $339 - Sensorless homing enable
 
-Parameter is a axismask where value is sum of X=0, Y=1, Z=2 etc.
+Parameter is a axismask where value is sum of X=1, Y=2, Z=4 etc.
 
 ---
 
@@ -87,4 +87,4 @@ Dependencies:
 [Trinamic TMC2130 I2C<>SPI Bridge](https://github.com/terjeio/Trinamic_TMC2130_I2C_SPI_Bridge) \(optional\)
 
 ---
-2020-01-06
+2021-01-31
