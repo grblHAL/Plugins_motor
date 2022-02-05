@@ -3,7 +3,7 @@
 
   Part of grblHAL
 
-  Copyright (c) 2018-2021 Terje Io
+  Copyright (c) 2018-2022 Terje Io
 
   Grbl is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -1601,7 +1601,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.08]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.09]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
@@ -1622,8 +1622,10 @@ static bool on_driver_setup (settings_t *settings)
 {
     bool ok;
 
-    if((ok = driver_setup(settings)))
+    if((ok = driver_setup(settings))) {
+        hal.delay_ms(100, NULL); // Allow time for drivers to boot
         trinamic_drivers_setup();
+    }
 
     return ok;
 }
