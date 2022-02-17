@@ -1015,7 +1015,8 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                     uint_fast16_t axis;
 
                     do {
-                        if((axis = motor_map[--motor].axis) == report.sg_status_motor) {
+                        motor--;
+                        if(stepper[motor] && (axis = motor_map[motor].axis) == report.sg_status_motor) {
                             if(trinamic.driver[axis].mode == TMCMode_StealthChop)
                                 stepper[motor]->stealthchop_enable(motor);
                             else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
