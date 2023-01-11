@@ -66,6 +66,16 @@ Settings are provided for axis enable, homing, stepper current, microsteps and s
 
 Valid values are 1, 2, 4, , 8, 16, 32, 64, 128 and 256.
 
+#### $20x - StallGuard sensitivity, fast \(locate\) threshold. x = 0 for X-axis, 1 for Y axis etc.
+
+Range is -64 to 63 for Stallguard2 \(TMC2130, TMC5160\), 0 - 255 for StallGuard4 \(TMC2209\).
+
+#### $21x - Hold current as percentage of stepper current. x = 0 for X-axis, 1 for Y axis etc.
+
+#### $22x - StallGuard sensitivity, slow \(seek\) threshold. x = 0 for X-axis, 1 for Y axis etc.
+
+Range is -64 to 63 for Stallguard2 \(TMC2130, TMC5160\), 0 - 255 for StallGuard4 \(TMC2209\).
+
 #### $338 - Driver enable
 
 Parameter is a axismask where value is sum of X=1, Y=2, Z=4 etc.
@@ -75,6 +85,16 @@ __NOTE__: Some boards does not allow mixed drivers, for these this setting is no
 #### $339 - Sensorless homing enable
 
 Parameter is a axismask where value is sum of X=1, Y=2, Z=4 etc.
+
+Sensorless homing requires tuning of parameters, the datasheet has information about how to:
+
+[TMC2130](https://www.trinamic.com/products/integrated-circuits/details/tmc2130/)  
+[TMC2209](https://www.trinamic.com/products/integrated-circuits/details/tmc2209-la/)  
+[TMC5160](https://www.trinamic.com/products/integrated-circuits/details/tmc5160/)  
+
+Some parameters are [hard coded](https://github.com/grblHAL/Plugins_motor/blob/master/trinamic.h) and require recompilation/reflasing to change.
+
+Note that tuning is not trivial, for one-off machines it is likely that endstop switches will be the best/easiest option to implement.
 
 ---
 
@@ -87,4 +107,4 @@ Dependencies:
 [Trinamic TMC2130 I2C<>SPI Bridge](https://github.com/terjeio/Trinamic_TMC2130_I2C_SPI_Bridge) \(optional\)
 
 ---
-2022-01-31
+2023-01-11
