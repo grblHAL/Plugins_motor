@@ -92,7 +92,7 @@ Sensorless homing requires tuning of parameters, the datasheet has information a
 [TMC2209](https://www.trinamic.com/products/integrated-circuits/details/tmc2209-la/)  
 [TMC5160](https://www.trinamic.com/products/integrated-circuits/details/tmc5160/)  
 
-Some parameters are [hard coded](https://github.com/grblHAL/Plugins_motor/blob/master/trinamic.h) and require recompilation/reflasing to change.
+Some parameters are [hard coded](https://github.com/grblHAL/Plugins_motor/blob/master/trinamic.h) and require recompilation/reflashing to change.
 
 Note that tuning is not trivial, for one-off machines it is likely that endstop switches will be the best/easiest option to implement.
 
