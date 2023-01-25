@@ -769,16 +769,6 @@ static void stepper_pulse_start (stepper_t *motors)
     }
 }
 
-#if TRINAMIC_DEV
-
-static void report_sg_params (void)
-{
-    sprintf(sbuf, "[SGPARAMS:%ld:%d:%d:%d]" ASCII_EOL, report.sg_status_motor, stepper[report.sg_status_motor].coolconf.reg.sfilt, stepper[report.sg_status_motor].coolconf.reg.semin, stepper[report.sg_status_motor].coolconf.reg.semax);
-    hal.stream.write(sbuf);
-}
-
-#endif
-
 static char *get_axisname (motor_map_t motor)
 {
     static char axisname[3] = {0};
@@ -788,6 +778,49 @@ static char *get_axisname (motor_map_t motor)
 
     return axisname;
 }
+
+#if TRINAMIC_DEV
+
+static uint_fast8_t bit_count (uint32_t n)
+{
+    uint_fast8_t count = 0;
+
+    while (n) {
+        n &= (n - 1);
+        count++;
+    }
+
+    return count;
+}
+
+static axes_signals_t get_axes (parameter_words_t words)
+{
+    axes_signals_t axes = {0};
+
+    axes.x = words.x;
+    axes.y = words.y;
+    axes.z = words.z;
+#ifdef A_AXIS
+    axes.a = words.a;
+#endif
+#ifdef B_AXIS
+    axes.b = words.b;
+#endif
+#ifdef C_AXIS
+    axes.c = words.c;
+#endif
+#ifdef U_AXIS
+    axes.u = words.u;
+#endif
+#ifdef V_AXIS
+    axes.v = words.v;
+#endif
+    axes.mask &= driver_enabled.mask;
+
+    return axes;
+}
+
+#endif
 
 // Validate M-code axis parameters
 // Sets value to NAN (Not A Number) and returns false if driver not installed
@@ -801,6 +834,10 @@ static bool check_params (parser_block_t *gc_block)
      , { .a = On },
        { .b = On },
        { .c = On }
+#endif
+#if N_AXIS > 6
+     , { .u = On },
+       { .v = On },
 #endif
     };
 
@@ -821,14 +858,11 @@ static bool check_params (parser_block_t *gc_block)
     return n_ok > 0 && n_ok == n_found;
 }
 
-#define Trinamic_StallGuardParams 123
-#define Trinamic_WriteRegister 124
-
 // Check if given M-code is handled here
 static user_mcode_t trinamic_MCodeCheck (user_mcode_t mcode)
 {
 #if TRINAMIC_DEV
-    if(mcode == Trinamic_StallGuardParams || mcode == Trinamic_WriteRegister)
+    if(mcode == Trinamic_ReadRegister || mcode == Trinamic_WriteRegister)
         return mcode;
 #endif
 
@@ -848,18 +882,28 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
 
 #if TRINAMIC_DEV
 
-        case Trinamic_StallGuardParams:
-            state = Status_OK;
-            break;
-
+        case Trinamic_ReadRegister:
         case Trinamic_WriteRegister:
-            if(gc_block->words.r && gc_block->words.q) {
-                if(isnanf(gc_block->values.r) || isnanf(gc_block->values.q))
-                    state = Status_BadNumberFormat;
+            {
+                axes_signals_t axes = get_axes(gc_block->words);
+                if(axes.mask == 0)
+                    state = Status_GcodeNoAxisWords;
+                else if(bit_count(axes.mask) > 1)
+                    state = Status_ValueWordConflict;
                 else {
-                    reg_ptr = TMC5160_GetRegPtr(&stepper[report.sg_status_motor], (tmc5160_regaddr_t)gc_block->values.r);
-                    state = reg_ptr == NULL ? Status_GcodeValueOutOfRange : Status_OK;
-                    gc_block->words.r = gc_block->words.q = Off;
+                    if(gc_block->words.i && !(gc_block->values.ijk[0] == 0.0f || gc_block->values.ijk[0] == 1.0f))
+                        state = Status_GcodeValueOutOfRange;
+                    if(gc_block->words.r && (gc_block->user_mcode == Trinamic_ReadRegister || gc_block->words.o)) {
+                        if(!isintf(gc_block->values.r))
+                            state = Status_BadNumberFormat;
+                        else {
+                            if(stepper[0]->get_register_addr(0, (uint8_t)gc_block->values.r))
+                                state = Status_OK;
+                            else
+                                state = Status_GcodeValueOutOfRange;
+                            gc_block->words.r = gc_block->words.o = Off;
+                        }
+                    }
                 }
             }
             break;
@@ -934,7 +978,20 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
             }
             break;
 
-        default:
+        case Trinamic_ChopperTiming:
+            if(check_params(gc_block)) {
+                state = Status_OK;
+                if(gc_block->words.o && (gc_block->values.o < 1 || gc_block->values.ijk[0] > 15))
+                    state = Status_BadNumberFormat;
+                if(gc_block->words.p && (!isintf(gc_block->values.p) || gc_block->values.p < -3.0f || gc_block->values.p > 12.0f))
+                    state = Status_BadNumberFormat;
+                if(gc_block->words.s && (!isintf(gc_block->values.s) || gc_block->values.s < 1.0f || gc_block->values.ijk[0] > 8.0f))
+                    state = Status_BadNumberFormat;
+                gc_block->words.o = gc_block->words.p = gc_block->words.s = Off;
+            }
+            break;
+
+    default:
             state = Status_Unhandled;
             break;
     }
@@ -952,13 +1009,34 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
 #if TRINAMIC_DEV
 
-        case Trinamic_StallGuardParams:
-            report_sg_params();
+        case Trinamic_ReadRegister:
+            {
+                uint32_t value;
+                uint_fast8_t axis, index = gc_block->words.i ? (uint8_t)gc_block->values.ijk[0] : 0;
+                axes_signals_t axes = get_axes(gc_block->words);
+                do {
+                    axis = motor_map[--motor].axis;
+                    if(bit_istrue(axes.mask, bit(axis)) && index ? axis != motor_map[motor].id : axis == motor_map[motor].id) {
+                        stepper[motor]->read_register(motor, (uint8_t)gc_block->values.r, &value);
+                        sprintf(sbuf, "[TMCREG:%d:%lx]" ASCII_EOL, (uint8_t)gc_block->values.r, value);
+                        hal.stream.write(sbuf);
+                    }
+                } while(motor);
+            }
             break;
 
         case Trinamic_WriteRegister:
-            reg_ptr->payload.value = (uint32_t)gc_block->values.q;
-            TMC5160_WriteRegister(&stepper[report.sg_status_motor], reg_ptr);
+            {
+                // NOTE: gcode parser has to be changed to allow reading full range uint32_t value into the O word!
+                uint_fast8_t axis, index = gc_block->words.i ? (uint8_t)gc_block->values.ijk[0] : 0;
+                axes_signals_t axes = get_axes(gc_block->words);
+                do {
+                    axis = motor_map[--motor].axis;
+                    if(bit_istrue(axes.mask, bit(axis)) && index ? axis != motor_map[motor].id : axis == motor_map[motor].id) {
+                        stepper[motor]->write_register(motor, (uint8_t)gc_block->values.r, gc_block->values.o);
+                    }
+                } while(motor);
+            }
             break;
 
 #endif
@@ -1007,6 +1085,12 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
     #endif
     #ifdef C_AXIS
                 axes.c = gc_block->words.c;
+    #endif
+    #ifdef U_AXIS
+                axes.u = gc_block->words.u;
+    #endif
+    #ifdef V_AXIS
+                axes.v = gc_block->words.v;
     #endif
                 axes.mask &= driver_enabled.mask;
 
@@ -1098,9 +1182,6 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
         case Trinamic_ClearPrewarnFlags:
             otpw_triggered.mask = 0;
-#if TRINAMIC_DEV
-            stallGuard_enable(report.sg_status_motor, true); // TODO: (re)move this...
-#endif
             break;
 
         case Trinamic_HybridThreshold:
@@ -1123,6 +1204,29 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                         trinamic.driver[axis].homing_seek_sensitivity = (int16_t)gc_block->values.xyz[axis];
                         stepper[motor]->sg_filter(motor, report.sfilt);
                         stepper[motor]->sg_stall_value(motor, trinamic.driver[axis].homing_seek_sensitivity);
+                    }
+                } while(motor);
+            }
+            break;
+
+        case Trinamic_ChopperTiming:
+            {
+                uint_fast8_t axis;
+                TMC_chopper_timing_t timing = chopper_timing;
+
+                if(gc_block->words.o)
+                    timing.toff = (uint8_t)gc_block->values.o;
+
+                if(gc_block->words.p)
+                    timing.hend = (int8_t)gc_block->values.p;
+
+                if(gc_block->words.s)
+                    timing.hstrt = (uint8_t)gc_block->values.s;
+
+                do {
+                    axis = motor_map[--motor].axis;
+                    if(!isnanf(gc_block->values.xyz[axis])) {
+                        stepper[motor]->chopper_timing(motor, timing);
                     }
                 } while(motor);
             }
@@ -1602,7 +1706,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.09]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.10]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));

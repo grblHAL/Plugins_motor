@@ -3,7 +3,7 @@
 
   Part of grblHAL
 
-  Copyright (c) 2018-2021 Terje Io
+  Copyright (c) 2018-2022 Terje Io
 
   Grbl is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -68,7 +68,11 @@
 //#define TMC_HOMING_ACCELERATION 50.0f // NOT tested... Reduce acceleration during homing to avoid falsely triggering DIAG output
 
 static const TMC_coolconf_t coolconf = { .semin = 5, .semax = 2, .sedn = 1 };
-static const TMC_chopper_timing_t chopper_timing = { .hstrt = 1, .hend = -1, .tbl = 1 };
+#if TRINAMIC_ENABLE == 2209
+static const TMC_chopper_timing_t chopper_timing = { .hstrt = 1, .hend = -1, .tbl = 1, .toff = 3 };
+#else
+static const TMC_chopper_timing_t chopper_timing = { .hstrt = 1, .hend = -1, .tbl = 1, .toff = 5 };
+#endif
 
 // General
 #if TRINAMIC_MIXED_DRIVERS
