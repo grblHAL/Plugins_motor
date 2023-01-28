@@ -3,7 +3,7 @@
 
   Part of grblHAL
 
-  Copyright (c) 2018-2022 Terje Io
+  Copyright (c) 2018-2023 Terje Io
 
   Grbl is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -245,6 +245,8 @@ typedef struct {
     uint16_t r_sense; // mOhm
     uint16_t microsteps;
     trinamic_mode_t mode;
+    float homing_seek_rate;
+    float homing_feed_rate;
     int16_t homing_seek_sensitivity;
     int16_t homing_feed_sensitivity;
 } motor_settings_t;

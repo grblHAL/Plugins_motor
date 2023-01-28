@@ -47,7 +47,6 @@ static bool warning = false, is_homing = false, settings_loaded = false;
 static volatile uint_fast16_t diag1_poll = 0;
 static char sbuf[65]; // string buffer for reports
 static uint_fast8_t n_motors = 0;
-static float current_homing_rate = 0.0f;
 static const tmchal_t *stepper[TMC_N_MOTORS_MAX];
 static motor_map_t *motor_map;
 static axes_signals_t homing = {0}, otpw_triggered = {0}, driver_enabled = {0};
@@ -118,6 +117,8 @@ static const setting_detail_t trinamic_settings[] = {
     { Setting_TrinamicHoming, Group_MotorDriver, "Sensorless homing", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCore, &trinamic.homing_enable.mask, NULL, NULL },
     { Setting_AxisStepperCurrent, Group_Axis0, "?-axis motor current", "mA", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL },
     { Setting_AxisMicroSteps, Group_Axis0, "?-axis microsteps", "steps", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL },
+    { Setting_AxisHomingFeedRate, Group_Axis0, "?-axis homing locate feed rate", "mm/min", Format_Decimal, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
+    { Setting_AxisHomingSeekRate, Group_Axis0, "?-axis homing search seek rate", "mm/min", Format_Decimal, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
 #if TMC_STALLGUARD == 4
     { Setting_AxisExtended0, Group_Axis0, "?-axis StallGuard4 fast threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL },
 #else
@@ -137,14 +138,20 @@ static const setting_descr_t trinamic_settings_descr[] = {
 #if TRINAMIC_MIXED_DRIVERS
     { Setting_TrinamicDriver, "Enable SPI or UART controlled Trinamic drivers for axes." },
 #endif
-    { Setting_TrinamicHoming, "Enable sensorless homing for axis. Requires SPI controlled Trinamic drivers." },
+    { Setting_TrinamicHoming, "Enable sensorless homing for axes. Requires SPI or UART controlled Trinamic drivers." },
     { Setting_AxisStepperCurrent, "Motor current in mA (RMS)." },
     { Setting_AxisMicroSteps, "Microsteps per fullstep." },
     { Setting_AxisExtended0, "StallGuard threshold for fast (seek) homing phase." },
-    { Setting_AxisExtended1, "Motor current at standstill as a percentage of full current.\n"
+    { Setting_AxisExtended1, "Motor current at standstill as a percentage of full current.\\n"
                              "NOTE: if grblHAL is configured to disable motors on standstill this setting has no use."
     },
     { Setting_AxisExtended2, "StallGuard threshold for slow (feed) homing phase." },
+    { Setting_AxisHomingFeedRate, "Feed rate to slowly engage limit switch to determine its location accurately.\\n"
+                                  "NOTE: only used for axes with Trinamic driver enabled, others use the $24 setting."
+    },
+    { Setting_AxisHomingSeekRate, "Seek rate to quickly find the limit switch before the slower locating phase.\\n"
+                                  "NOTE: only used for axes with Trinamic driver enabled, others use the $25 setting."
+    },
 };
 
 #endif
@@ -293,6 +300,14 @@ static status_code_t set_axis_setting_float (setting_id_t setting, float value)
 
     switch(settings_get_axis_base(setting, &idx)) {
 
+        case Setting_AxisHomingFeedRate:
+            trinamic.driver[idx].homing_feed_rate = value;
+            break;
+
+        case Setting_AxisHomingSeekRate:
+            trinamic.driver[idx].homing_seek_rate = value;
+            break;
+
         case Setting_AxisExtended0:
             trinamic.driver[idx].homing_seek_sensitivity = (int16_t)value;
             break;
@@ -316,6 +331,14 @@ static float get_axis_setting_float (setting_id_t setting)
     uint_fast8_t idx;
 
     switch(settings_get_axis_base(setting, &idx)) {
+
+        case Setting_AxisHomingFeedRate:
+            value = trinamic.driver[idx].homing_feed_rate;
+            break;
+
+        case Setting_AxisHomingSeekRate:
+            value = trinamic.driver[idx].homing_seek_rate;
+            break;
 
         case Setting_AxisExtended0:
             value = (float)trinamic.driver[idx].homing_seek_sensitivity;
@@ -440,6 +463,10 @@ static void trinamic_settings_restore (void)
                 break;
 #endif
         }
+
+        trinamic.driver[idx].homing_seek_rate = DEFAULT_HOMING_SEEK_RATE;
+        trinamic.driver[idx].homing_feed_rate = DEFAULT_HOMING_FEED_RATE;
+
     } while(idx);
 
     hal.nvs.memcpy_to_nvs(nvs_address, (uint8_t *)&trinamic, sizeof(trinamic_settings_t), true);
@@ -1285,29 +1312,65 @@ static limit_signals_t trinamic_limits (void)
 #endif
 
 // Configure sensorless homing for enabled axes
-static void trinamic_on_homing (axes_signals_t axes, float rate, bool pulloff)
+static void trinamic_on_homing (axes_signals_t axes, float feedrate, homing_mode_t mode)
 {
     uint_fast8_t motor = n_motors, axis;
 
-    axes.mask = driver_enabled.mask & trinamic.homing_enable.mask;
+    axes.mask &= (driver_enabled.mask & trinamic.homing_enable.mask);
 
     if(axes.mask) do {
+
         axis = motor_map[--motor].axis;
-        if(bit_istrue(axes.mask, bit(axis))) {
-            if(pulloff) {
-                current_homing_rate = 0.0f;
+
+        if(bit_istrue(axes.mask, bit(axis))) switch(mode) {
+
+            case HomingMode_Seek:
+                stepper[motor]->stallguard_enable(motor, feedrate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_seek_sensitivity);
+                break;
+
+            case HomingMode_Locate:
+                stepper[motor]->stallguard_enable(motor, feedrate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_feed_sensitivity);
+                break;
+
+            default: // HomingMode_Pulloff
                 if(trinamic.driver[axis].mode == TMCMode_StealthChop)
                     stepper[motor]->stealthchop_enable(motor);
                 else if(trinamic.driver[axis].mode == TMCMode_CoolStep)
                     stepper[motor]->coolstep_enable(motor);
-            } else if(current_homing_rate != rate) {
-                if(rate == settings.homing.feed_rate)
-                    stepper[motor]->stallguard_enable(motor, rate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_feed_sensitivity);
-                else
-                    stepper[motor]->stallguard_enable(motor, rate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_seek_sensitivity);
+                break;
+        }
+    } while(motor);
+}
+
+// Get homing rate for the homing cycle.
+// NOTE: if more than one axis is homed in the cycle all axes has to be configured with
+//       the same feedrates or the cycle will be skipped.
+static float trinamic_get_homing_rate (axes_signals_t axes, homing_mode_t mode)
+{
+    axes.mask &= (driver_enabled.mask & trinamic.homing_enable.mask);
+
+    if(!axes.mask /*?? || mode == HomingMode_Pulloff*/)
+        return mode == HomingMode_Locate ? settings.homing.feed_rate : settings.homing.seek_rate;
+
+    float feed_rate = 0.0f;
+    uint_fast8_t motor = n_motors, axis;
+
+    do {
+        axis = motor_map[--motor].axis;
+        if(bit_istrue(axes.mask, bit(axis))) {
+
+            float rate_cfg = mode == HomingMode_Locate ? trinamic.driver[axis].homing_feed_rate : trinamic.driver[axis].homing_seek_rate;
+
+            if(feed_rate == 0.0f)
+                feed_rate = rate_cfg;
+            else if(feed_rate != rate_cfg) {
+                feed_rate = 0.0f;
+                break;
             }
         }
     } while(motor);
+
+    return feed_rate;
 }
 
 // Enable/disable sensorless homing
@@ -1327,7 +1390,6 @@ static void trinamic_homing (bool on, bool enable)
 
     if(enable) {
 
-        current_homing_rate = 0.0f;
         grbl.on_homing_rate_set = trinamic_on_homing;
 
 #ifdef TMC_HOMING_ACCELERATION
@@ -1778,6 +1840,8 @@ bool trinamic_init (void)
 
         limits_enable = hal.limits.enable;
         hal.limits.enable = trinamic_homing;
+
+        hal.homing.get_feedrate = trinamic_get_homing_rate;
 
         settings_register(&settings_details);
 
