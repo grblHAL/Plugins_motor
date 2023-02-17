@@ -559,14 +559,14 @@ static void trinamic_settings_load (void)
     settings_loaded = true;
 }
 
-static void on_settings_changed (settings_t *settings)
+static void on_settings_changed (settings_t *settings, settings_changed_flags_t changed)
 {
     static bool init_ok = false;
     static float steps_per_mm[N_AXIS];
 
     uint_fast8_t idx = N_AXIS;
 
-    settings_changed(settings);
+    settings_changed(settings, changed);
 
     if(init_ok) {
         do {
