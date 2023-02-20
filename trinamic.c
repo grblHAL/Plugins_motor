@@ -1352,25 +1352,35 @@ static float trinamic_get_homing_rate (axes_signals_t axes, homing_mode_t mode)
     if(!axes.mask /*?? || mode == HomingMode_Pulloff*/)
         return mode == HomingMode_Locate ? settings.homing.feed_rate : settings.homing.seek_rate;
 
-    float feed_rate = 0.0f;
     uint_fast8_t motor = n_motors, axis;
+    float feed_rate = 0.0f, seek_rate = 0.0f;
 
     do {
         axis = motor_map[--motor].axis;
         if(bit_istrue(axes.mask, bit(axis))) {
 
-            float rate_cfg = mode == HomingMode_Locate ? trinamic.driver[axis].homing_feed_rate : trinamic.driver[axis].homing_seek_rate;
+            float feed_rate_cfg = trinamic.driver[axis].homing_feed_rate,
+                  seek_rate_cfg = trinamic.driver[axis].homing_seek_rate;
 
-            if(feed_rate == 0.0f)
-                feed_rate = rate_cfg;
-            else if(feed_rate != rate_cfg) {
-                feed_rate = 0.0f;
+            if(feed_rate == 0.0f) {
+                feed_rate = feed_rate_cfg;
+                seek_rate = seek_rate_cfg;
+            } else if(!(feed_rate == feed_rate_cfg && seek_rate == seek_rate_cfg)) {
+                feed_rate = seek_rate = 0.0f;
+                break;
+            }
+        } else {
+            if(feed_rate == 0.0f) {
+                feed_rate = settings.homing.feed_rate;
+                seek_rate = settings.homing.seek_rate;
+            } else if(!(feed_rate == settings.homing.feed_rate && seek_rate == settings.homing.seek_rate)) {
+                feed_rate = seek_rate = 0.0f;
                 break;
             }
         }
     } while(motor);
 
-    return feed_rate;
+    return mode == HomingMode_Locate ? feed_rate : seek_rate;
 }
 
 // Enable/disable sensorless homing
@@ -1768,7 +1778,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.10]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.11]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
