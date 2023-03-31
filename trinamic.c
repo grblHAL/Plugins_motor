@@ -1264,8 +1264,8 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
             break;
     }
 
-    if(!handled && hal.user_mcode.execute)
-        hal.user_mcode.execute(state, gc_block);
+    if(!handled && user_mcode.execute)
+        user_mcode.execute(state, gc_block);
 }
 
 #if TRINAMIC_I2C
