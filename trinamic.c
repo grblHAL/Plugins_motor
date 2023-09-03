@@ -1150,7 +1150,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                         }
                     }
 
-                    if(report.sg_status_enable) {
+                    if(report.sg_status_enable && stepper[report.sg_status_motor]) {
 
                         report.sg_status_motormask.mask = 1 << report.sg_status_motor;
                         report.msteps = trinamic.driver[report.sg_status_motor].microsteps;
@@ -1386,21 +1386,20 @@ static float trinamic_get_homing_rate (axes_signals_t axes, homing_mode_t mode)
 }
 
 // Enable/disable sensorless homing
-static void trinamic_homing (bool on, bool enable)
+static void trinamic_homing (bool on, axes_signals_t homing_cycle)
 {
 #ifdef TMC_HOMING_ACCELERATION
     static float accel[N_AXIS];
 #endif
 
     if(limits_enable)
-        limits_enable(on, enable);
+        limits_enable(on, homing_cycle);
 
     homing.mask = driver_enabled.mask & trinamic.homing_enable.mask;
 
-    is_homing = enable;
-    enable = enable && homing.mask;
+    is_homing = homing_cycle.mask != 0;
 
-    if(enable) {
+    if(is_homing && homing.mask) {
 
         grbl.on_homing_rate_set = trinamic_on_homing;
 
