@@ -82,13 +82,11 @@ static const TMC_chopper_timing_t chopper_timing = { .hstrt = 1, .hend = -1, .tb
 #endif
 #define TMC_X_MONITOR 1
 #define TMC_X_MICROSTEPS 16
-#define TMC_X_R_SENSE R_SENSE   // mOhm
+#define TMC_X_R_SENSE R_SENSE // mOhm
 
-#ifndef DEFAULT_X_CURRENT
-#define TMC_X_CURRENT 500       // mA RMS
-#else
-#define TMC_X_CURRENT DEFAULT_X_CURRENT       // mA RMS
-#endif 
+#ifndef TMC_X_CURRENT
+#define TMC_X_CURRENT DEFAULT_X_CURRENT // mA RMS
+#endif
 
 #define TMC_X_HOLD_CURRENT_PCT 50
 #define TMC_X_HOMING_SEEK_SGT 22
@@ -107,12 +105,10 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #endif
 #define TMC_Y_MONITOR 1
 #define TMC_Y_MICROSTEPS 16
-#define TMC_Y_R_SENSE R_SENSE   // mOhm
+#define TMC_Y_R_SENSE R_SENSE // mOhm
 
-#ifndef DEFAULT_Y_CURRENT
-#define TMC_Y_CURRENT 500       // mA RMS
-#else
-#define TMC_Y_CURRENT DEFAULT_Y_CURRENT       // mA RMS
+#ifndef TMC_Y_CURRENT
+#define TMC_Y_CURRENT DEFAULT_Y_CURRENT // mA RMS
 #endif
 
 #define TMC_Y_HOLD_CURRENT_PCT 50
@@ -132,12 +128,10 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #endif
 #define TMC_Z_MONITOR 1
 #define TMC_Z_MICROSTEPS 16
-#define TMC_Z_R_SENSE R_SENSE   // mOhm
+#define TMC_Z_R_SENSE R_SENSE // mOhm
 
-#ifndef DEFAULT_Z_CURRENT
-#define TMC_Z_CURRENT 500       // mA RMS
-#else
-#define TMC_Z_CURRENT DEFAULT_Z_CURRENT       // mA RMS
+#ifndef TMC_Z_CURRENT
+#define TMC_Z_CURRENT DEFAULT_Z_CURRENT // mA RMS
 #endif
 
 #define TMC_Z_HOLD_CURRENT_PCT 50
@@ -159,13 +153,11 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #endif
 #define TMC_A_MONITOR 1
 #define TMC_A_MICROSTEPS 16
-#define TMC_A_R_SENSE R_SENSE   // mOhm
+#define TMC_A_R_SENSE R_SENSE // mOhm
 
-#ifndef DEFAULT_A_CURRENT
-#define TMC_A_CURRENT 500       // mA RMS
-#else
-#define TMC_A_CURRENT DEFAULT_A_CURRENT       // mA RMS
-#endif 
+#ifndef TMC_A_CURRENT
+#define TMC_A_CURRENT DEFAULT_A_CURRENT // mA RMS
+#endif
 
 #define TMC_A_HOLD_CURRENT_PCT 50
 #define TMC_A_HOMING_SEEK_SGT 22
@@ -188,13 +180,11 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #endif
 #define TMC_B_MONITOR 1
 #define TMC_B_MICROSTEPS 16
-#define TMC_B_R_SENSE R_SENSE   // mOhm
+#define TMC_B_R_SENSE R_SENSE // mOhm
 
-#ifndef DEFAULT_B_CURRENT
-#define TMC_B_CURRENT 500       // mA RMS
-#else
-#define TMC_B_CURRENT DEFAULT_B_CURRENT       // mA RMS
-#endif 
+#ifndef TMC_B_CURRENT
+#define TMC_B_CURRENT DEFAULT_B_CURRENT // mA RMS
+#endif
 
 #define TMC_B_HOLD_CURRENT_PCT 50
 #define TMC_B_HOMING_SEEK_SGT 22
@@ -217,13 +207,11 @@ stepper[motor]->chopper_timing(motor, chopper_timing);
 #endif
 #define TMC_C_MONITOR 1
 #define TMC_C_MICROSTEPS 16
-#define TMC_C_R_SENSE R_SENSE   // mOhm
+#define TMC_C_R_SENSE R_SENSE // mOhm
 
-#ifndef DEFAULT_C_CURRENT
-#define TMC_C_CURRENT 500       // mA RMS
-#else
-#define TMC_C_CURRENT DEFAULT_C_CURRENT       // mA RMS
-#endif 
+#ifndef TMC_C_CURRENT
+#define TMC_C_CURRENT DEFAULT_C_CURRENT // mA RMS
+#endif
 
 #define TMC_C_HOLD_CURRENT_PCT 50
 #define TMC_C_HOMING_SEEK_SGT 22
