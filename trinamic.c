@@ -421,7 +421,7 @@ static void trinamic_settings_restore (void)
 #else
                 trinamic.driver[idx].mode = TMCMode_CoolStep;
 #endif
-                trinamic.driver_enable.z = TMC_A_ENABLE;
+                trinamic.driver_enable.a = TMC_A_ENABLE;
                 trinamic.driver[idx].current = TMC_A_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_A_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_A_MICROSTEPS;
@@ -438,7 +438,7 @@ static void trinamic_settings_restore (void)
 #else
                 trinamic.driver[idx].mode = TMCMode_CoolStep;
 #endif
-                trinamic.driver_enable.z = TMC_B_ENABLE;
+                trinamic.driver_enable.b = TMC_B_ENABLE;
                 trinamic.driver[idx].current = TMC_B_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_B_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_B_MICROSTEPS;
@@ -455,7 +455,7 @@ static void trinamic_settings_restore (void)
 #else
                 trinamic.driver[idx].mode = TMCMode_CoolStep;
 #endif
-                trinamic.driver_enable.z = TMC_C_ENABLE;
+                trinamic.driver_enable.c = TMC_C_ENABLE;
                 trinamic.driver[idx].current = TMC_C_CURRENT;
                 trinamic.driver[idx].hold_current_pct = TMC_C_HOLD_CURRENT_PCT;
                 trinamic.driver[idx].microsteps = TMC_C_MICROSTEPS;
@@ -1779,7 +1779,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.12]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.13]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
