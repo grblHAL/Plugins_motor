@@ -650,7 +650,7 @@ static void on_settings_changed (settings_t *settings, settings_changed_flags_t 
 
 #endif // End region settings
 
-static void pos_failed (sys_state_t state)
+static void pos_failed (void *data)
 {
     report_message("Could not communicate with stepper driver!", Message_Warning);
 }
@@ -675,7 +675,7 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
     #endif
 
     if(!ok) {
-        protocol_enqueue_rt_command(pos_failed);
+        protocol_enqueue_foreground_task(pos_failed, NULL);
     //    system_raise_alarm(Alarm_SelftestFailed);
         return false;
     }
@@ -847,7 +847,7 @@ static void write_line (char *s)
 }
 
 //
-static void report_sg_status (sys_state_t state)
+static void report_sg_status (void *data)
 {
     hal.stream.write("[SG:");
     hal.stream.write(uitoa(stepper[report.sg_status_motor]->get_sg_result(report.sg_status_motor)));
@@ -864,12 +864,12 @@ static void stepper_pulse_start (stepper_t *motors)
         uint32_t ms = hal.get_elapsed_ticks();
         if(ms - step_count >= 20) {
             step_count = ms;
-            protocol_enqueue_rt_command(report_sg_status);
+            protocol_enqueue_foreground_task(report_sg_status, NULL);
         }
 /*        step_count++;
         if(step_count >= report.msteps * 4) {
             step_count = 0;
-            protocol_enqueue_rt_command(report_sg_status);
+            protocol_enqueue_foreground_task(report_sg_status, NULL);
         } */
     }
 }
@@ -1152,7 +1152,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                     if(gc_block->words.i)
                         trinamic_drivers_init(trinamic.driver_enable);
                     else
-                        pos_failed(state_get());
+                        pos_failed(NULL);
                     return;
                 }
 
@@ -1855,7 +1855,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.14]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.15]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
