@@ -1729,7 +1729,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                         if(stepper[motor] && (axis = motor_map[motor].axis) == report.sg_status_motor) {
                             if(trinamic.driver[axis].mode == TMCMode_StealthChop)
                                 stepper[motor]->stealthchop_enable(motor);
-                            else if(trinamic.driver[motor].mode == TMCMode_CoolStep)
+                            else if(trinamic.driver[axis].mode == TMCMode_CoolStep)
                                 stepper[motor]->coolstep_enable(motor);
                         }
                     } while(motor);
@@ -2390,7 +2390,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.15]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:Trinamic v0.16]" ASCII_EOL);
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
