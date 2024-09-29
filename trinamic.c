@@ -50,6 +50,7 @@
 static bool warning = false, is_homing = false, settings_loaded = false;
 static volatile uint_fast16_t diag1_poll = 0;
 static char sbuf[65]; // string buffer for reports
+static char min_current[5], max_current[5];
 static uint_fast8_t n_motors = 0;
 static const tmchal_t *stepper[TMC_N_MOTORS_MAX];
 static motor_map_t *motor_map;
@@ -393,10 +394,16 @@ static void trinamic_drivers_init (axes_signals_t axes)
     } while(motor);
 
     motor = n_motors;
+    *min_current = '\0';
     do {
         if(bit_istrue(axes.mask, bit(motor_map[--motor].axis))) {
-            if((ok = trinamic_driver_config(motor_map[motor], --seq)))
+            if((ok = trinamic_driver_config(motor_map[motor], --seq))) {
                 n_enabled++;
+                if(*min_current == '\0') {
+                    strcpy(min_current, uitoa(stepper[motor_map[motor].id]->get_current(motor_map[motor].id, TMCCurrent_Min)));
+                    strcpy(max_current, uitoa(stepper[motor_map[motor].id]->get_current(motor_map[motor].id, TMCCurrent_Max)));
+                }
+            }
         }
     } while(ok && motor);
 
@@ -856,7 +863,7 @@ static const setting_detail_t trinamic_settings[] = {
     { Setting_TrinamicDriver, Group_MotorDriver, "Trinamic driver", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCoreFn, set_driver_enable, get_driver_enable, NULL },
 #endif
     { Setting_TrinamicHoming, Group_MotorDriver, "Sensorless homing", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCore, &trinamic.homing_enable.mask, NULL, NULL },
-    { Setting_AxisStepperCurrent, Group_Axis0, "-axis motor current", "mA", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
+    { Setting_AxisStepperCurrent, Group_Axis0, "-axis motor current", "mA", Format_Integer, "###0", min_current, max_current, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
     { Setting_AxisMicroSteps, Group_Axis0, "-axis microsteps", "steps", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
     { Setting_AxisHomingFeedRate, Group_Axis0, "-axis homing locate feed rate", "mm/min", Format_Decimal, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
     { Setting_AxisHomingSeekRate, Group_Axis0, "-axis homing search seek rate", "mm/min", Format_Decimal, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
@@ -2075,7 +2082,7 @@ static void write_debug_report (uint_fast8_t axes)
         if(bit_istrue(axes, bit(motor_map[--motor].axis))) {
             debug_report[motor].drv_status = stepper[motor]->get_drv_status(motor);
             debug_report[motor].chopconf = stepper[motor]->get_chopconf(motor);
-            debug_report[motor].current = stepper[motor]->get_current(motor);
+            debug_report[motor].current = stepper[motor]->get_current(motor, TMCCurrent_Actual);
             debug_report[motor].ihold_irun =  stepper[motor]->get_ihold_irun(motor);
 //            TMC5160_ReadRegister(&stepper[motor], (TMC5160_datagram_t *)&stepper[motor]->pwm_scale);
             if(debug_report[motor].drv_status.otpw)
