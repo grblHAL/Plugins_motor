@@ -2397,7 +2397,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-        hal.stream.write("[PLUGIN:Trinamic v0.16]" ASCII_EOL);
+    	report_plugin("Trinamic", "0.17");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));

@@ -80,7 +80,7 @@
 #endif
 
 #ifndef TMC_STEALTHCHOP
-#define TMC_STEALTHCHOP             1    // 0 = CoolStep, 1 = StealthChop
+#define TMC_STEALTHCHOP             0    // 0 = CoolStep, 1 = StealthChop
 #endif
 
 #if TRINAMIC_ENABLE == 2209
