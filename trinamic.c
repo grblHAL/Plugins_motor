@@ -1492,22 +1492,24 @@ static bool check_params (parser_block_t *gc_block)
 }
 
 // Check if given M-code is handled here
-static user_mcode_t trinamic_MCodeCheck (user_mcode_t mcode)
+static user_mcode_type_t trinamic_MCodeCheck (user_mcode_t mcode)
 {
 #if TRINAMIC_DEV
     if(mcode == Trinamic_ReadRegister || mcode == Trinamic_WriteRegister)
-        return mcode;
+        return UserMCode_Normal;
 #endif
 
-    return mcode == Trinamic_DebugReport ||
-            (driver_enabled.mask && (mcode == Trinamic_StepperCurrent || mcode == Trinamic_ReportPrewarnFlags || mcode == Trinamic_ClearPrewarnFlags ||
-                                      mcode == Trinamic_HybridThreshold || mcode == Trinamic_HomingSensitivity))
-              ? mcode
-              : (user_mcode.check ? user_mcode.check(mcode) : UserMCode_Ignore);
+    return (driver_enabled.mask && (mcode == Trinamic_StepperCurrent || mcode == Trinamic_ReportPrewarnFlags ||
+                                     mcode == Trinamic_ClearPrewarnFlags || mcode == Trinamic_HybridThreshold ||
+                                      mcode == Trinamic_HomingSensitivity))
+             ? UserMCode_Normal
+             : (mcode == Trinamic_DebugReport
+                 ? UserMCode_NoValueWords
+                 : (user_mcode.check ? user_mcode.check(mcode) : UserMCode_Unsupported));
 }
 
 // Validate driver specific M-code parameters
-static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter_words_t *deprecated)
+static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block)
 {
     status_code_t state = Status_GcodeValueWordMissing;
 
@@ -1629,7 +1631,7 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block, parameter
             break;
     }
 
-    return state == Status_Unhandled && user_mcode.validate ? user_mcode.validate(gc_block, deprecated) : state;
+    return state == Status_Unhandled && user_mcode.validate ? user_mcode.validate(gc_block) : state;
 }
 
 // Execute driver specific M-code
@@ -2449,11 +2451,11 @@ bool trinamic_init (void)
 
     if(motor_map && (nvs_address = nvs_alloc(sizeof(trinamic_settings_t)))) {
 
-        memcpy(&user_mcode, &hal.user_mcode, sizeof(user_mcode_ptrs_t));
+        memcpy(&user_mcode, &grbl.user_mcode, sizeof(user_mcode_ptrs_t));
 
-        hal.user_mcode.check = trinamic_MCodeCheck;
-        hal.user_mcode.validate = trinamic_MCodeValidate;
-        hal.user_mcode.execute = trinamic_MCodeExecute;
+        grbl.user_mcode.check = trinamic_MCodeCheck;
+        grbl.user_mcode.validate = trinamic_MCodeValidate;
+        grbl.user_mcode.execute = trinamic_MCodeExecute;
 
         on_realtime_report = grbl.on_realtime_report;
         grbl.on_realtime_report = trinamic_realtime_report;
