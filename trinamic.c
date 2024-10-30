@@ -361,7 +361,7 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
         cfg.settings->mode = TMCMode_CoolStep;
 
 #if PWM_THRESHOLD_VELOCITY > 0
-    stepper[motor.id]->set_tpwmthrs(motor.id, (float)PWM_THRESHOLD_VELOCITY / 60.0f, cfg.settings->steps_per_mm);
+    stepper[motor.id]->set_tpwmthrs(motor.id, (float)PWM_THRESHOLD_VELOCITY / 60.0f, settings.axis[motor.axis].steps_per_mm);
 #endif
     stepper[motor.id]->set_current(motor.id, cfg.settings->current, cfg.settings->hold_current_pct);
     stepper[motor.id]->set_microsteps(motor.id, cfg.settings->microsteps);
@@ -2399,7 +2399,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.17");
+    	report_plugin("Trinamic", "0.18");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));

@@ -79,6 +79,10 @@
 #define PWM_THRESHOLD_VELOCITY      0 // mm/min - 0 to disable, should be set > homing seek rate when enabled (use M913 to set at run time)
 #endif
 
+#if PWM_THRESHOLD_VELOCITY > 0 && TRINAMIC_ENABLE == 2660
+#error "TMC2660 does not support PWM_THRESHOLD_VELOCITY"
+#endif
+
 #ifndef TMC_STEALTHCHOP
 #define TMC_STEALTHCHOP             0    // 0 = CoolStep, 1 = StealthChop
 #endif
