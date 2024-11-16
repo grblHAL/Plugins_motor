@@ -622,6 +622,8 @@ static float get_axis_setting_float (setting_id_t setting)
 
 static status_code_t set_extended (setting_id_t id, uint_fast16_t value)
 {
+    bool drvconf_changed = false;
+
     switch(id) {
 
         case Setting_Stepper1:
@@ -665,11 +667,17 @@ static status_code_t set_extended (setting_id_t id, uint_fast16_t value)
             break;
 
         case Setting_Stepper12:
-            trinamic.cfg_params.coolconf.seimin = value;
+            trinamic.cfg_params.coolconf.sedn = value;
             break;
 
         case Setting_Stepper13:
-            trinamic.cfg_params.chopconf.tbl = value;
+            trinamic.cfg_params.coolconf.seimin = value;
+            break;
+
+        case Setting_Stepper14:
+            value &= cfg_cap.drvconf;
+            drvconf_changed = trinamic.cfg_params.drvconf != value;
+            trinamic.cfg_params.drvconf = value;
             break;
 
         default:
@@ -679,8 +687,12 @@ static status_code_t set_extended (setting_id_t id, uint_fast16_t value)
     uint_fast8_t motor = n_motors;
     do {
         if(stepper[--motor]) {
-            stepper[motor]->coolconf(motor, cfg_params->coolconf);
-            stepper[motor]->chopper_timing(motor, cfg_params->chopconf);
+            if(drvconf_changed)
+                stepper[motor]->write_register(motor, stepper[motor]->drvconf_address, cfg_params->drvconf);
+            else {
+                stepper[motor]->coolconf(motor, cfg_params->coolconf);
+                stepper[motor]->chopper_timing(motor, cfg_params->chopconf);
+            }
         }
     } while(motor);
 
@@ -718,7 +730,7 @@ static uint32_t get_extended (setting_id_t setting)
             break;
 
         case Setting_Stepper8:
-            value = trinamic.cfg_params.chopconf.tbl; //
+//            value = trinamic.cfg_params.chopconf.tbl;
             break;
 
         case Setting_Stepper9:
@@ -734,11 +746,15 @@ static uint32_t get_extended (setting_id_t setting)
             break;
 
         case Setting_Stepper12:
-            value = trinamic.cfg_params.coolconf.seimin;
+            value = trinamic.cfg_params.coolconf.sedn;
             break;
 
         case Setting_Stepper13:
-            value = trinamic.cfg_params.chopconf.tbl;
+            value = trinamic.cfg_params.coolconf.seimin;
+            break;
+
+        case Setting_Stepper14:
+            value = trinamic.cfg_params.drvconf;
             break;
 
         default:
@@ -824,7 +840,7 @@ static bool is_extended_available (const setting_detail_t *setting)
             break;
 
         case Setting_Stepper8:
-            ok = !!cfg_cap.chopconf.tbl; //
+//            ok = !!cfg_cap.chopconf.tbl;
             break;
 
         case Setting_Stepper9:
@@ -840,11 +856,15 @@ static bool is_extended_available (const setting_detail_t *setting)
             break;
 
         case Setting_Stepper12:
-            ok = !!cfg_cap.coolconf.seimin;
+            ok = !!cfg_cap.coolconf.sedn;
             break;
 
         case Setting_Stepper13:
-            ok = !!cfg_cap.chopconf.tbl;
+            ok = !!cfg_cap.coolconf.seimin;
+            break;
+
+        case Setting_Stepper14:
+            ok = !!cfg_cap.drvconf;
             break;
 
         default:
@@ -892,7 +912,7 @@ static const setting_detail_t trinamic_settings[] = {
     { Setting_Stepper11, Group_MotorDriver, "CoolStep semax", NULL, Format_Int8, "#0", "0", "15", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
     { Setting_Stepper12, Group_MotorDriver, "CoolStep sedn", NULL, Format_Int8, "0", "0", "3", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
     { Setting_Stepper13, Group_MotorDriver, "CoolStep seimin", NULL, Format_RadioButtons, "0.5 x CS,.25 x CS", NULL, NULL, Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper14, Group_MotorDriver, "drvconf_reg", NULL, Format_Int8, "###0", NULL, NULL, Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
+    { Setting_Stepper14, Group_MotorDriver, "Driver config (drvconf)", NULL, Format_Integer, "##########0", NULL, NULL, Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
 #endif
 };
 
@@ -938,9 +958,11 @@ static const setting_descr_t trinamic_settings_descr[] = {
     { Setting_Stepper10, "Number of increments of the coil current each time SG is sampled below the lower threshold (0-3 = 1,2,4,8)." },
     { Setting_Stepper11, "Upper CoolStep threshold offset from lower threshold. If SG is sampled above (SEMIN+SEMAX+1)x32 enough times, the coil current scaling factor is decremented (0-15)." },
     { Setting_Stepper12, "Number of times SG must be sampled above the upper threshold before the coil current is decremented (0-3 = 32,8,2,1)." },
-    { Setting_Stepper13, "Minimum CoolStep current as a factor of the set motor current\\n"
+    { Setting_Stepper13, "Minimum CoolStep current as a factor of the set motor current.\\n"
                           "0: 1/2, 1: 1/4" },
-    { Setting_Stepper14, "DRVCONF register." },
+    { Setting_Stepper14, "Driver configuration register.\\n"
+                         "Default value is 41759 (0xA31F). All protections enabled.\\n\\n"
+                         "Do NOT change unless you know what you are doing!" },
 #endif
 };
 
@@ -965,7 +987,7 @@ static void trinamic_settings_get_defaults (bool cap_only)
     params = TMC5160_GetConfigDefaults();
 #endif
 
-    memcpy(&cfg_cap, &params->dflt, sizeof(trinamic_cfg_t));
+    memcpy(&cfg_cap, &params->cap, sizeof(trinamic_cfg_t));
 
     if(!cap_only)
         memcpy(cfg_params, &params->dflt, sizeof(trinamic_cfg_t));
@@ -2399,7 +2421,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.18");
+    	report_plugin("Trinamic", "0.19");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
