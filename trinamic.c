@@ -47,11 +47,36 @@
 #define TRINAMIC_POLL_INTERVAL 250
 #endif
 
-static bool warning = false, is_homing = false, settings_loaded = false;
+#define TMCsetting_HomingSeekSensitivity    Setting_AxisExtended0
+#define TMCsetting_HoldCurrentPct           Setting_AxisExtended1
+#define TMCsetting_HomingFeedSensitivity    Setting_AxisExtended2
+
+#if TRINAMIC_EXTENDED_SETTINGS
+#define TMCsetting_Chopconf_TOFF            Setting_Stepper1
+#define TMCsetting_Chopconf_TBL             Setting_Stepper2
+#define TMCsetting_Chopconf_CHM             Setting_Stepper3
+#define TMCsetting_Chopconf_HSTRT           Setting_Stepper4
+#define TMCsetting_Chopconf_HEND            Setting_Stepper5
+#define TMCsetting_Chopconf_HDEC            Setting_Stepper6
+#define TMCsetting_Chopconf_RNDTF           Setting_Stepper7
+//#define TMCsetting_Chopconf_RNDTF Setting_Stepper8
+#define TMCsetting_Coolconf_SEMIN           Setting_Stepper9
+#define TMCsetting_Coolconf_SEUP            Setting_Stepper10
+#define TMCsetting_Coolconf_SEMAX           Setting_Stepper11
+#define TMCsetting_Coolconf_SEDN            Setting_Stepper12
+#define TMCsetting_Coolconf_SEIMIN          Setting_Stepper13
+#define TMCsetting_Drvconf                  Setting_Stepper14
+#endif // TRINAMIC_EXTENDED_SETTINGS
+
+typedef void (*mcode_run_callback_ptr)(parser_block_t *gc_block, uint8_t motor, bool axis_words);
+
+static bool warning = false, is_homing = false, settings_loaded = false, custom_drvconf = false;
 static volatile uint_fast16_t diag1_poll = 0;
 static char sbuf[65]; // string buffer for reports
 static char min_current[5], max_current[5];
 static uint_fast8_t n_motors = 0;
+static float vsense[2];
+static trinamic_chopconf_t m919_chopconf[TMC_N_MOTORS_MAX];
 static const tmchal_t *stepper[TMC_N_MOTORS_MAX];
 static motor_map_t *motor_map;
 static axes_signals_t homing = {0}, otpw_triggered = {0}, driver_enabled = {0};
@@ -69,7 +94,7 @@ static user_mcode_ptrs_t user_mcode;
 static trinamic_driver_if_t driver_if = {0};
 static trinamic_settings_t trinamic;
 static trinamic_cfg_t cfg_cap;
-#ifdef TRINAMIC_EXTENDED_SETTINGS
+#if TRINAMIC_EXTENDED_SETTINGS
 static trinamic_cfg_t *cfg_params = &trinamic.cfg_params;
 #else
 static trinamic_cfg_t params, *cfg_params = &params;
@@ -351,6 +376,11 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
 #endif
     }
 
+#if TRINAMIC_EXTENDED_SETTINGS
+    if(cfg_cap.drvconf && custom_drvconf)
+        stepper[motor.id]->write_register(motor.id, stepper[motor.id]->drvconf_address, cfg_params->drvconf);
+#endif
+
     stepper[motor.id]->sg_filter(motor.id, 1);
     stepper[motor.id]->coolconf(motor.id, cfg_params->coolconf);
     stepper[motor.id]->chopper_timing(motor.id, cfg_params->chopconf);
@@ -378,8 +408,6 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
 
     return true;
 }
-
-#if 1 // Region settings
 
 static void trinamic_drivers_init (axes_signals_t axes)
 {
@@ -465,7 +493,7 @@ static uint32_t get_driver_enable (setting_id_t setting)
     return trinamic.driver_enable.mask;
 }
 
-#endif
+#endif // TRINAMIC_MIXED_DRIVERS
 
 // Parse and set driver specific parameters
 static status_code_t set_axis_setting (setting_id_t setting, uint_fast16_t value)
@@ -488,7 +516,7 @@ static status_code_t set_axis_setting (setting_id_t setting, uint_fast16_t value
             } while(motor);
             break;
 
-        case Setting_AxisExtended1: // Hold current percentage
+        case TMCsetting_HoldCurrentPct: // Hold current percentage
             if(value > 100)
                 value = 100;
             trinamic.driver[axis].hold_current_pct = (uint16_t)value;
@@ -539,7 +567,7 @@ static uint32_t get_axis_setting (setting_id_t setting)
             value = trinamic.driver[idx].current;
             break;
 
-        case Setting_AxisExtended1: // Hold current percentage
+        case TMCsetting_HoldCurrentPct: // Hold current percentage
             value = trinamic.driver[idx].hold_current_pct;
             break;
 
@@ -571,11 +599,11 @@ static status_code_t set_axis_setting_float (setting_id_t setting, float value)
             trinamic.driver[idx].homing_seek_rate = value;
             break;
 
-        case Setting_AxisExtended0:
+        case TMCsetting_HomingSeekSensitivity:
             trinamic.driver[idx].homing_seek_sensitivity = (int16_t)value;
             break;
 
-        case Setting_AxisExtended2:
+        case TMCsetting_HomingFeedSensitivity:
             trinamic.driver[idx].homing_feed_sensitivity = (int16_t)value;
             break;
 
@@ -603,11 +631,11 @@ static float get_axis_setting_float (setting_id_t setting)
             value = trinamic.driver[idx].homing_seek_rate;
             break;
 
-        case Setting_AxisExtended0:
+        case TMCsetting_HomingSeekSensitivity:
             value = (float)trinamic.driver[idx].homing_seek_sensitivity;
             break;
 
-        case Setting_AxisExtended2:
+        case TMCsetting_HomingFeedSensitivity:
             value = (float)trinamic.driver[idx].homing_feed_sensitivity;
             break;
 
@@ -618,7 +646,7 @@ static float get_axis_setting_float (setting_id_t setting)
     return value;
 }
 
-#ifdef TRINAMIC_EXTENDED_SETTINGS
+#if TRINAMIC_EXTENDED_SETTINGS
 
 static status_code_t set_extended (setting_id_t id, uint_fast16_t value)
 {
@@ -626,55 +654,55 @@ static status_code_t set_extended (setting_id_t id, uint_fast16_t value)
 
     switch(id) {
 
-        case Setting_Stepper1:
+        case TMCsetting_Chopconf_TOFF:
             trinamic.cfg_params.chopconf.toff = value;
             break;
 
-        case Setting_Stepper2:
+        case TMCsetting_Chopconf_TBL:
             trinamic.cfg_params.chopconf.tbl = value;
             break;
 
-        case Setting_Stepper3:
+        case TMCsetting_Chopconf_CHM:
             trinamic.cfg_params.chopconf.chm = value;
             break;
 
-        case Setting_Stepper4:
+        case TMCsetting_Chopconf_HSTRT:
             trinamic.cfg_params.chopconf.hstrt = value - 1;
             break;
 
-        case Setting_Stepper6:
+        case TMCsetting_Chopconf_HDEC:
             trinamic.cfg_params.chopconf.hdec = value;
             break;
 
-        case Setting_Stepper7:
+        case TMCsetting_Chopconf_RNDTF:
             trinamic.cfg_params.chopconf.rndtf = value;
             break;
 
-        case Setting_Stepper8:
-            trinamic.cfg_params.chopconf.tbl = value; //
-            break;
+//        case Setting_Stepper8:
+//            trinamic.cfg_params.chopconf.tbl = value;
+//            break;
 
-        case Setting_Stepper9:
+        case TMCsetting_Coolconf_SEMIN:
             trinamic.cfg_params.coolconf.semin = value;
             break;
 
-        case Setting_Stepper10:
+        case TMCsetting_Coolconf_SEUP:
             trinamic.cfg_params.coolconf.seup = value;
             break;
 
-        case Setting_Stepper11:
+        case TMCsetting_Coolconf_SEMAX:
             trinamic.cfg_params.coolconf.semax = value;
             break;
 
-        case Setting_Stepper12:
+        case TMCsetting_Coolconf_SEDN:
             trinamic.cfg_params.coolconf.sedn = value;
             break;
 
-        case Setting_Stepper13:
+        case TMCsetting_Coolconf_SEIMIN:
             trinamic.cfg_params.coolconf.seimin = value;
             break;
 
-        case Setting_Stepper14:
+        case TMCsetting_Drvconf:
             value &= cfg_cap.drvconf;
             drvconf_changed = trinamic.cfg_params.drvconf != value;
             trinamic.cfg_params.drvconf = value;
@@ -705,59 +733,60 @@ static uint32_t get_extended (setting_id_t setting)
 
     switch(setting) {
 
-        case Setting_Stepper1:
+        case TMCsetting_Chopconf_TOFF:
             value = trinamic.cfg_params.chopconf.toff;
             break;
 
-        case Setting_Stepper2:
+        case TMCsetting_Chopconf_TBL:
             value = trinamic.cfg_params.chopconf.tbl;
             break;
 
-        case Setting_Stepper3:
+        case TMCsetting_Chopconf_CHM:
             value = trinamic.cfg_params.chopconf.chm;
             break;
 
-        case Setting_Stepper4:
+        case TMCsetting_Chopconf_HSTRT:
             value = trinamic.cfg_params.chopconf.hstrt + 1;
             break;
 
-        case Setting_Stepper6:
+        case TMCsetting_Chopconf_HDEC:
             value = trinamic.cfg_params.chopconf.hdec;
             break;
 
-        case Setting_Stepper7:
+        case TMCsetting_Chopconf_RNDTF:
             value = trinamic.cfg_params.chopconf.rndtf;
             break;
 
-        case Setting_Stepper8:
+//        case Setting_Stepper8:
 //            value = trinamic.cfg_params.chopconf.tbl;
-            break;
+//            break;
 
-        case Setting_Stepper9:
+        case TMCsetting_Coolconf_SEMIN:
             value = trinamic.cfg_params.coolconf.semin;
             break;
 
-        case Setting_Stepper10:
+        case TMCsetting_Coolconf_SEUP:
             value = trinamic.cfg_params.coolconf.seup;
             break;
 
-        case Setting_Stepper11:
+        case TMCsetting_Coolconf_SEMAX:
             value = trinamic.cfg_params.coolconf.semax;
             break;
 
-        case Setting_Stepper12:
+        case TMCsetting_Coolconf_SEDN:
             value = trinamic.cfg_params.coolconf.sedn;
             break;
 
-        case Setting_Stepper13:
+        case TMCsetting_Coolconf_SEIMIN:
             value = trinamic.cfg_params.coolconf.seimin;
             break;
 
-        case Setting_Stepper14:
+        case TMCsetting_Drvconf:
             value = trinamic.cfg_params.drvconf;
             break;
 
         default:
+            value = 0;
             break;
     }
 
@@ -768,7 +797,7 @@ static status_code_t set_extended_float (setting_id_t id, float value)
 {
     switch(id) {
 
-        case Setting_Stepper5:
+        case TMCsetting_Chopconf_HEND:
             if(isintf(value))
                 trinamic.cfg_params.chopconf.hend = (int8_t)(value) + 3;
             else
@@ -790,15 +819,16 @@ static status_code_t set_extended_float (setting_id_t id, float value)
 
 static float get_extended_float (setting_id_t setting)
 {
-    uint32_t value;
+    float value;
 
     switch(setting) {
 
-        case Setting_Stepper5:
+        case TMCsetting_Chopconf_HEND:
             value = (float)trinamic.cfg_params.chopconf.hend - 3.0f;
             break;
 
         default:
+            value = 0.0f;
             break;
     }
 
@@ -811,59 +841,59 @@ static bool is_extended_available (const setting_detail_t *setting)
 
     switch(setting->id) {
 
-        case Setting_Stepper1:
+        case TMCsetting_Chopconf_TOFF:
             ok = !!cfg_cap.chopconf.toff;
             break;
 
-        case Setting_Stepper2:
+        case TMCsetting_Chopconf_TBL:
             ok = !!cfg_cap.chopconf.tbl;
             break;
 
-        case Setting_Stepper3:
+        case TMCsetting_Chopconf_CHM:
             ok = !!cfg_cap.chopconf.chm;
             break;
 
-        case Setting_Stepper4:
+        case TMCsetting_Chopconf_HSTRT:
             ok = !!cfg_cap.chopconf.hstrt;
             break;
 
-        case Setting_Stepper5:
+        case TMCsetting_Chopconf_HEND:
             ok = !!cfg_cap.chopconf.hend;
             break;
 
-        case Setting_Stepper6:
+        case TMCsetting_Chopconf_HDEC:
             ok = !!cfg_cap.chopconf.hdec;
             break;
 
-        case Setting_Stepper7:
+        case TMCsetting_Chopconf_RNDTF:
             ok = !!cfg_cap.chopconf.rndtf;
             break;
 
-        case Setting_Stepper8:
+//        case Setting_Stepper8:
 //            ok = !!cfg_cap.chopconf.tbl;
-            break;
+//            break;
 
-        case Setting_Stepper9:
+        case TMCsetting_Coolconf_SEMIN:
             ok = !!cfg_cap.coolconf.semin;
             break;
 
-        case Setting_Stepper10:
+        case TMCsetting_Coolconf_SEUP:
             ok = !!cfg_cap.coolconf.seup;
             break;
 
-        case Setting_Stepper11:
+        case TMCsetting_Coolconf_SEMAX:
             ok = !!cfg_cap.coolconf.semax;
             break;
 
-        case Setting_Stepper12:
+        case TMCsetting_Coolconf_SEDN:
             ok = !!cfg_cap.coolconf.sedn;
             break;
 
-        case Setting_Stepper13:
+        case TMCsetting_Coolconf_SEIMIN:
             ok = !!cfg_cap.coolconf.seimin;
             break;
 
-        case Setting_Stepper14:
+        case TMCsetting_Drvconf:
             ok = !!cfg_cap.drvconf;
             break;
 
@@ -874,7 +904,7 @@ static bool is_extended_available (const setting_detail_t *setting)
     return ok;
 }
 
-#endif
+#endif // TRINAMIC_EXTENDED_SETTINGS
 
 #define AXIS_OPTS { .subgroups = On, .increment = 1 }
 
@@ -888,31 +918,31 @@ static const setting_detail_t trinamic_settings[] = {
     { Setting_AxisHomingFeedRate, Group_Axis0, "-axis homing locate feed rate", "mm/min", Format_Decimal, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
     { Setting_AxisHomingSeekRate, Group_Axis0, "-axis homing search seek rate", "mm/min", Format_Decimal, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
 #if TMC_STALLGUARD == 4
-    { Setting_AxisExtended0, Group_Axis0, "-axis StallGuard4 fast threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
+    { TMCsetting_HomingSeekSensitivity, Group_Axis0, "-axis StallGuard4 fast threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
 #else
-    { Setting_AxisExtended0, Group_Axis0, "-axis StallGuard2 fast threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
+    { TMCsetting_HomingSeekSensitivity, Group_Axis0, "-axis StallGuard2 fast threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
 #endif
-    { Setting_AxisExtended1, Group_Axis0, "-axis hold current", "%", Format_Int8, "##0", "5", "100", Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
+    { TMCsetting_HoldCurrentPct, Group_Axis0, "-axis hold current", "%", Format_Int8, "##0", "5", "100", Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
 #if TMC_STALLGUARD == 4
-    { Setting_AxisExtended2, Group_Axis0, "-axis StallGuard4 slow threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
+    { TMCsetting_HomingFeedSensitivity, Group_Axis0, "-axis StallGuard4 slow threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
 #else
-    { Setting_AxisExtended2, Group_Axis0, "-axis stallGuard2 slow threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
+    { TMCsetting_HomingFeedSensitivity, Group_Axis0, "-axis stallGuard2 slow threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
 #endif
-#ifdef TRINAMIC_EXTENDED_SETTINGS
-    { Setting_Stepper1, Group_MotorDriver, "Chopper toff", NULL, Format_Int8, "#0", "1", "15", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper2, Group_MotorDriver, "Chopper tbl", NULL, Format_Int8, "0", "0", "3", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper3, Group_MotorDriver, "Chopper mode", NULL, Format_RadioButtons, "Spreadcycle,Constant toff", NULL, NULL, Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper4, Group_MotorDriver, "Chopper hstrt", NULL, Format_Int8, "0", "1", "8", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper5, Group_MotorDriver, "Chopper hend", NULL, Format_Decimal, "-#0", "-3", "12", Setting_NonCoreFn, &set_extended_float, &get_extended_float, is_extended_available },
-    { Setting_Stepper6, Group_MotorDriver, "Chopper hdec", NULL, Format_Int8, "0", "0", "3", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper7, Group_MotorDriver, "Chopper random TOFF", NULL, Format_Bool, NULL, NULL, NULL, Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-//??    { Setting_Stepper8, Group_MotorDriver, "THRESH", NULL, Format_Int8, "###0", NULL, NULL, Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available }, // == Setting_AxisExtended0 & Setting_AxisExtended1?
-    { Setting_Stepper9, Group_MotorDriver, "CoolStep semin", NULL, Format_Int8, "#0", "0", "15", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper10, Group_MotorDriver, "CoolStep seup", NULL, Format_Int8, "0", "0", "3", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper11, Group_MotorDriver, "CoolStep semax", NULL, Format_Int8, "#0", "0", "15", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper12, Group_MotorDriver, "CoolStep sedn", NULL, Format_Int8, "0", "0", "3", Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper13, Group_MotorDriver, "CoolStep seimin", NULL, Format_RadioButtons, "0.5 x CS,.25 x CS", NULL, NULL, Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
-    { Setting_Stepper14, Group_MotorDriver, "Driver config (drvconf)", NULL, Format_Integer, "##########0", NULL, NULL, Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available },
+#if TRINAMIC_EXTENDED_SETTINGS
+    { TMCsetting_Chopconf_TOFF, Group_MotorDriver, "Chopper toff", NULL, Format_Int8, "#0", "1", "15", Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Chopconf_TBL, Group_MotorDriver, "Chopper tbl", NULL, Format_Int8, "0", "0", "3", Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Chopconf_CHM, Group_MotorDriver, "Chopper mode", NULL, Format_RadioButtons, "Spreadcycle,Constant toff", NULL, NULL, Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Chopconf_HSTRT, Group_MotorDriver, "Chopper hstrt", NULL, Format_Int8, "0", "1", "8", Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Chopconf_HEND, Group_MotorDriver, "Chopper hend", NULL, Format_Decimal, "-#0", "-3", "12", Setting_NonCoreFn, set_extended_float, get_extended_float, is_extended_available },
+    { TMCsetting_Chopconf_HDEC, Group_MotorDriver, "Chopper hdec", NULL, Format_Int8, "0", "0", "3", Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Chopconf_RNDTF, Group_MotorDriver, "Chopper random TOFF", NULL, Format_Bool, NULL, NULL, NULL, Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+//??    { Setting_Stepper8, Group_MotorDriver, "THRESH", NULL, Format_Int8, "###0", NULL, NULL, Setting_NonCoreFn, &set_extended, &get_extended, is_extended_available }, // == Setting_AxisExtended0 & Setting_AxisExtended2?
+    { TMCsetting_Coolconf_SEMIN, Group_MotorDriver, "CoolStep semin", NULL, Format_Int8, "#0", "0", "15", Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Coolconf_SEUP, Group_MotorDriver, "CoolStep seup", NULL, Format_Int8, "0", "0", "3", Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Coolconf_SEMAX, Group_MotorDriver, "CoolStep semax", NULL, Format_Int8, "#0", "0", "15", Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Coolconf_SEDN, Group_MotorDriver, "CoolStep sedn", NULL, Format_Int8, "0", "0", "3", Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Coolconf_SEIMIN, Group_MotorDriver, "CoolStep seimin", NULL, Format_RadioButtons, "0.5 x CS,.25 x CS", NULL, NULL, Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
+    { TMCsetting_Drvconf, Group_MotorDriver, "Driver config (drvconf)", NULL, Format_Integer, "##########0", NULL, NULL, Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
 #endif
 };
 
@@ -925,48 +955,50 @@ static const setting_descr_t trinamic_settings_descr[] = {
     { Setting_TrinamicHoming, "Enable sensorless homing for axes. Requires SPI or UART controlled Trinamic drivers." },
     { Setting_AxisStepperCurrent, "Motor current in mA (RMS)." },
     { Setting_AxisMicroSteps, "Microsteps per fullstep." },
-    { Setting_AxisExtended0, "StallGuard threshold for fast (seek) homing phase." },
-    { Setting_AxisExtended1, "Motor current at standstill as a percentage of full current.\\n"
+    { TMCsetting_HomingSeekSensitivity, "StallGuard threshold for fast (seek) homing phase." },
+    { TMCsetting_HoldCurrentPct, "Motor current at standstill as a percentage of full current.\\n"
                              "NOTE: if grblHAL is configured to disable motors on standstill this setting has no use."
     },
-    { Setting_AxisExtended2, "StallGuard threshold for slow (feed) homing phase." },
+    { TMCsetting_HomingFeedSensitivity, "StallGuard threshold for slow (feed) homing phase." },
     { Setting_AxisHomingFeedRate, "Feed rate to slowly engage limit switch to determine its location accurately.\\n"
                                   "NOTE: only used for axes with Trinamic driver enabled, others use the $24 setting."
     },
     { Setting_AxisHomingSeekRate, "Seek rate to quickly find the limit switch before the slower locating phase.\\n"
                                   "NOTE: only used for axes with Trinamic driver enabled, others use the $25 setting."
     },
-#ifdef TRINAMIC_EXTENDED_SETTINGS
-    { Setting_Stepper1, "Off time. Duration of slow decay phase as a multiple of system clock periods: NCLK= 24 + (32 x TOFF). This will limit the maximum chopper frequency (0-15).\\n"
-                         "0: MOSFETs shut off, driver disabled.\\n"
-                         "1: Use with TBL of minimum 24 clocks." },
-    { Setting_Stepper2, "Blanking time interval in system clock periods (0-3 = 16,24,36,54). Needs to cover the switching event and the duration of the ringing on the sense resistor." },
-    { Setting_Stepper3, "Chopper mode. Affects HDEC, HEND, and HSTRT parameters.\\n"
-                         "0: Standard mode (SpreadCycle).\\n"
-                         "1: Constant TOFF with fast decay time. Fast decay is after on time. Fast decay time is also terminated when the negative nominal current is reached." },
-    { Setting_Stepper4, "CHM=0: Hysteresis start, offset from HEND (1-8). To be effective, HEND+HSTRT must be ≤15.\\n"
-                        "CHM=1: Fast decay time. Three least-significant bits of the duration of the fast decay phase. The MSB is HDEC0. Fast decay time is a multiple of system clock periods: NCLK= 32 x (HDEC0+HSTRT)."},
-    { Setting_Stepper5, "Can be either negative, zero, or positive, -3 to 12.\\n"
-                        "CHM=0: Hysteresis end (low). Sets the hysteresis end value after a number of decrements, used for the hysteresis chopper and controlled by HDEC. HSTRT+HEND must be less than 16. 1/512 adds to the current setting.\\n"
-                        "CHM=1: Sine wave offset. A positive offset corrects for zero crossing error. 1/512 adds to the absolute value of each sine wave entry." },
-    { Setting_Stepper6, "CHM=0: Hysteresis decrement interval period in system clock periods. Determines the slope of the hysteresis during on time from fast to very slow (0-3 = 16,32,48,64).\\n"
-                         "CHM=1: Fast decay mode." },
-    { Setting_Stepper7, "Change from fixed to randomized TOFF times, by dNCLK= -24 to +6 clocks." },
+#if TRINAMIC_EXTENDED_SETTINGS
+    { TMCsetting_Chopconf_TOFF, "Off time. Duration of slow decay phase as a multiple of system clock periods: NCLK= 24 + (32 x TOFF). This will limit the maximum chopper frequency (0-15).\\n"
+                                "0: MOSFETs shut off, driver disabled.\\n"
+                                "1: Use with TBL of minimum 24 clocks." },
+    { TMCsetting_Chopconf_TBL, "Blanking time interval in system clock periods (0-3 = 16,24,36,54). Needs to cover the switching event and the duration of the ringing on the sense resistor." },
+    { TMCsetting_Chopconf_CHM, "Chopper mode. Affects HDEC, HEND, and HSTRT parameters.\\n"
+                               "0: Standard mode (SpreadCycle).\\n"
+                               "1: Constant TOFF with fast decay time. Fast decay is after on time. Fast decay time is also terminated when the negative nominal current is reached." },
+    { TMCsetting_Chopconf_HSTRT, "CHM=0: Hysteresis start, offset from HEND (1-8). To be effective, HEND+HSTRT must be less or equal to 15.\\n"
+                                 "CHM=1: Fast decay time. Three least-significant bits of the duration of the fast decay phase. "
+                                 "The MSB is HDEC0. Fast decay time is a multiple of system clock periods: NCLK=32 x (HDEC0+HSTRT)."},
+    { TMCsetting_Chopconf_HEND, "Can be either negative, zero, or positive, -3 to 12.\\n"
+                                "CHM=0: Hysteresis end (low). Sets the hysteresis end value after a number of decrements, used for the hysteresis chopper and controlled by HDEC. "
+                                "HSTRT+HEND must be less than 16. 1/512 adds to the current setting.\\n"
+                                "CHM=1: Sine wave offset. A positive offset corrects for zero crossing error. 1/512 adds to the absolute value of each sine wave entry." },
+    { TMCsetting_Chopconf_HDEC, "CHM=0: Hysteresis decrement interval period in system clock periods. Determines the slope of the hysteresis during on time from fast to very slow (0-3 = 16,32,48,64).\\n"
+                                "CHM=1: Fast decay mode." },
+    { TMCsetting_Chopconf_RNDTF, "Change from fixed to randomized TOFF times, by dNCLK= -24 to +6 clocks." },
 //    { Setting_Stepper8, "StallGuard threshold." },
-    { Setting_Stepper9, "Lower CoolStep threshold. If the SG value falls below SEMIN x 32, the coil current scaling factor is increased (0-15).\\n"
+    { TMCsetting_Coolconf_SEMIN, "Lower CoolStep threshold. If the SG value falls below SEMIN x 32, the coil current scaling factor is increased (0-15).\\n"
                          "0: CoolStep disabled."},
-    { Setting_Stepper10, "Number of increments of the coil current each time SG is sampled below the lower threshold (0-3 = 1,2,4,8)." },
-    { Setting_Stepper11, "Upper CoolStep threshold offset from lower threshold. If SG is sampled above (SEMIN+SEMAX+1)x32 enough times, the coil current scaling factor is decremented (0-15)." },
-    { Setting_Stepper12, "Number of times SG must be sampled above the upper threshold before the coil current is decremented (0-3 = 32,8,2,1)." },
-    { Setting_Stepper13, "Minimum CoolStep current as a factor of the set motor current.\\n"
-                          "0: 1/2, 1: 1/4" },
-    { Setting_Stepper14, "Driver configuration register.\\n"
-                         "Default value is 41759 (0xA31F). All protections enabled.\\n\\n"
-                         "Do NOT change unless you know what you are doing!" },
+    { TMCsetting_Coolconf_SEUP, "Number of increments of the coil current each time SG is sampled below the lower threshold (0-3 = 1,2,4,8)." },
+    { TMCsetting_Coolconf_SEMAX, "Upper CoolStep threshold offset from lower threshold. If SG is sampled above (SEMIN+SEMAX+1)x32 enough times, the coil current scaling factor is decremented (0-15)." },
+    { TMCsetting_Coolconf_SEDN, "Number of times SG must be sampled above the upper threshold before the coil current is decremented (0-3 = 32,8,2,1)." },
+    { TMCsetting_Coolconf_SEIMIN, "Minimum CoolStep current as a factor of the set motor current.\\n"
+                                  "0: 1/2, 1: 1/4" },
+    { TMCsetting_Drvconf, "Driver configuration register.\\n"
+                          "To get default value back reset plugin settings with $RST=&\\n\\n"
+                          "Do NOT change unless you know what you are doing!" },
 #endif
 };
 
-#endif
+#endif // NO_SETTINGS_DESCRIPTIONS
 
 static void trinamic_settings_save (void)
 {
@@ -1038,6 +1070,10 @@ static void trinamic_settings_get_defaults (bool cap_only)
 #ifdef TMC_CHOPCONF_INTPOL
     cfg_params->chopconf.intpol = TMC_CHOPCONF_INTPOL & cfg_cap.chopconf.intpol;
 #endif
+
+    vsense[0] = params->vsense[0] / 1000.0f;
+    vsense[1] = params->vsense[1] / 1000.0f;
+    custom_drvconf = cfg_params->drvconf != params->dflt.drvconf;
 }
 
 // Initialize default EEPROM settings
@@ -1197,13 +1233,13 @@ static void trinamic_settings_restore (void)
 
 static void trinamic_settings_load (void)
 {
+    uint_fast8_t idx = N_AXIS;
+
     if(hal.nvs.memcpy_from_nvs((uint8_t *)&trinamic, nvs_address, sizeof(trinamic_settings_t), true) != NVS_TransferResult_OK)
         trinamic_settings_restore();
     else {
 
-        uint_fast8_t idx = N_AXIS;
-
-#ifdef TRINAMIC_EXTENDED_SETTINGS
+#if TRINAMIC_EXTENDED_SETTINGS
         trinamic_settings_get_defaults(true);
 #else
         trinamic_settings_get_defaults(false);
@@ -1302,6 +1338,11 @@ static void trinamic_settings_load (void)
         } while(idx);
     }
 
+    idx = TMC_N_MOTORS_MAX;
+    do {
+        m919_chopconf[--idx].value = cfg_params->chopconf.value;
+    } while(idx);
+
 #if !TRINAMIC_MIXED_DRIVERS
     trinamic.driver_enable.mask = AXES_BITMASK;
 #endif
@@ -1309,7 +1350,7 @@ static void trinamic_settings_load (void)
     settings_loaded = true;
 }
 
-static void on_settings_changed (settings_t *settings, settings_changed_flags_t changed)
+static void onSettingsChanged (settings_t *settings, settings_changed_flags_t changed)
 {
     static bool init_ok = false;
     static float steps_per_mm[N_AXIS];
@@ -1349,23 +1390,8 @@ static void on_settings_changed (settings_t *settings, settings_changed_flags_t 
 #endif
 }
 
-static setting_details_t settings_details = {
-    .settings = trinamic_settings,
-    .n_settings = sizeof(trinamic_settings) / sizeof(setting_detail_t),
-#ifndef NO_SETTINGS_DESCRIPTIONS
-    .descriptions = trinamic_settings_descr,
-    .n_descriptions = sizeof(trinamic_settings_descr) / sizeof(setting_descr_t),
-#endif
-    .load = trinamic_settings_load,
-    .save = trinamic_settings_save,
-    .restore = trinamic_settings_restore
-};
-
-#endif // End region settings
-
-
 // Add warning info to next realtime report when warning flag set by drivers
-static void trinamic_realtime_report (stream_write_ptr stream_write, report_tracking_flags_t report)
+static void onRealtimeReport (stream_write_ptr stream_write, report_tracking_flags_t report)
 {
     if(warning) {
         warning = false;
@@ -1404,7 +1430,7 @@ static void report_sg_status (void *data)
     hal.stream.write("]" ASCII_EOL);
 }
 
-static void stepper_pulse_start (stepper_t *motors)
+static void stepperPulseStart (stepper_t *motors)
 {
     static uint32_t step_count = 0;
 
@@ -1448,54 +1474,45 @@ static uint_fast8_t bit_count (uint32_t n)
     return count;
 }
 
-static axes_signals_t get_axes (parameter_words_t words)
+#endif
+
+static const parameter_words_t wordmap[] = {
+   { .x = On },
+   { .y = On },
+   { .z = On }
+#if N_AXIS > 3
+ , { .a = On },
+   { .b = On },
+   { .c = On }
+#endif
+#if N_AXIS > 6
+ , { .u = On },
+   { .v = On },
+#endif
+};
+
+static axes_signals_t mcode_get_axis_mask (parameter_words_t *words)
 {
+    uint_fast8_t idx = N_AXIS;
     axes_signals_t axes = {0};
 
-    axes.x = words.x;
-    axes.y = words.y;
-    axes.z = words.z;
-#ifdef A_AXIS
-    axes.a = words.a;
-#endif
-#ifdef B_AXIS
-    axes.b = words.b;
-#endif
-#ifdef C_AXIS
-    axes.c = words.c;
-#endif
-#ifdef U_AXIS
-    axes.u = words.u;
-#endif
-#ifdef V_AXIS
-    axes.v = words.v;
-#endif
+    do {
+        idx--;
+        if(words->mask & wordmap[idx].mask) {
+            bit_true(axes.mask, bit(idx));
+            words->mask &= ~wordmap[idx].mask;
+        }
+    } while(idx);
+
     axes.mask &= driver_enabled.mask;
 
     return axes;
 }
 
-#endif
-
 // Validate M-code axis parameters
 // Sets value to NAN (Not A Number) and returns false if driver not installed
-static bool check_params (parser_block_t *gc_block)
+static bool mcode_validate_axis_values (parser_block_t *gc_block)
 {
-    static const parameter_words_t wordmap[] = {
-       { .x = On },
-       { .y = On },
-       { .z = On }
-#if N_AXIS > 3
-     , { .a = On },
-       { .b = On },
-       { .c = On }
-#endif
-#if N_AXIS > 6
-     , { .u = On },
-       { .v = On },
-#endif
-    };
-
     uint_fast8_t n_found = 0, n_ok = 0, idx = N_AXIS;
 
     do {
@@ -1513,25 +1530,39 @@ static bool check_params (parser_block_t *gc_block)
     return n_ok > 0 && n_ok == n_found;
 }
 
+static inline bool mcode_value_in_range (float value, int32_t min, int32_t max)
+{
+    return isintf(value) && value >= (float)min && value <= (float)max;
+}
+
+static inline status_code_t mcode_validate_index (parser_block_t *gc_block)
+{
+    status_code_t state = gc_block->words.i && !mcode_value_in_range(gc_block->values.ijk[0], 0, 1) ? Status_GcodeValueOutOfRange : Status_OK;
+
+    gc_block->words.i = Off;
+
+    return state;
+}
+
 // Check if given M-code is handled here
-static user_mcode_type_t trinamic_MCodeCheck (user_mcode_t mcode)
+static user_mcode_type_t mcode_check (user_mcode_t mcode)
 {
 #if TRINAMIC_DEV
     if(mcode == Trinamic_ReadRegister || mcode == Trinamic_WriteRegister)
-        return UserMCode_Normal;
+        return UserMCode_NoValueWords;
 #endif
 
     return (driver_enabled.mask && (mcode == Trinamic_StepperCurrent || mcode == Trinamic_ReportPrewarnFlags ||
                                      mcode == Trinamic_ClearPrewarnFlags || mcode == Trinamic_HybridThreshold ||
                                       mcode == Trinamic_HomingSensitivity))
              ? UserMCode_Normal
-             : (mcode == Trinamic_DebugReport
+             : (mcode == Trinamic_DebugReport || mcode ==  Trinamic_ChopperTiming || (mcode == Trinamic_ModeToggle && !!stepper[0]->get_en_pwm_mode)
                  ? UserMCode_NoValueWords
                  : (user_mcode.check ? user_mcode.check(mcode) : UserMCode_Unsupported));
 }
 
 // Validate driver specific M-code parameters
-static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block)
+static status_code_t mcode_validate (parser_block_t *gc_block)
 {
     status_code_t state = Status_GcodeValueWordMissing;
 
@@ -1542,30 +1573,23 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block)
         case Trinamic_ReadRegister:
         case Trinamic_WriteRegister:
             {
-                axes_signals_t axes = get_axes(gc_block->words);
+                axes_signals_t axes = mcode_get_axis_mask(&gc_block->words);
                 if(axes.mask == 0)
                     state = Status_GcodeNoAxisWords;
                 else if(bit_count(axes.mask) > 1)
                     state = Status_ValueWordConflict;
-                else {
-                    if(gc_block->words.i && !(gc_block->values.ijk[0] == 0.0f || gc_block->values.ijk[0] == 1.0f))
-                        state = Status_GcodeValueOutOfRange;
-                    if(gc_block->words.r && (gc_block->user_mcode == Trinamic_ReadRegister || gc_block->words.o)) {
-                        if(!isintf(gc_block->values.r))
-                            state = Status_BadNumberFormat;
-                        else {
-                            if(stepper[0]->get_register_addr(0, (uint8_t)gc_block->values.r))
-                                state = Status_OK;
-                            else
-                                state = Status_GcodeValueOutOfRange;
-                            gc_block->words.r = gc_block->words.o = Off;
-                        }
+                else if((state = mcode_validate_index(gc_block)) == Status_OK && gc_block->words.r && (gc_block->user_mcode == Trinamic_ReadRegister || gc_block->words.o)) {
+                    if(!isintf(gc_block->values.r))
+                        state = Status_BadNumberFormat;
+                    else {
+                        state = !!stepper[0]->get_register_addr(0, (uint8_t)gc_block->values.r) ? Status_OK : Status_GcodeValueOutOfRange;
+                        gc_block->words.r = gc_block->words.o = Off;
                     }
                 }
             }
             break;
 
-#endif
+#endif // TRINAMIC_DEV
 
         case Trinamic_DebugReport:
             state = Status_OK;
@@ -1579,24 +1603,23 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block)
             if(gc_block->words.s && isnanf(gc_block->values.s))
                 state = Status_BadNumberFormat;
 
-            gc_block->words.h = gc_block->words.i = gc_block->words.q = gc_block->words.s =
-             gc_block->words.x = gc_block->words.y = gc_block->words.z = Off;
+            gc_block->words.h = gc_block->words.i = gc_block->words.q = gc_block->words.s = Off;
 
-#ifdef A_AXIS
-            gc_block->words.a = Off;
-#endif
-#ifdef B_AXIS
-            gc_block->words.b = Off;
-#endif
-#ifdef C_AXIS
-            gc_block->words.c = Off;
-#endif
+            mcode_get_axis_mask(&gc_block->words); // clear axis words
 //            gc_block->user_mcode_sync = true;
             break;
 
+        case Trinamic_ModeToggle:
+            mcode_get_axis_mask(&gc_block->words);
+            state = mcode_validate_index(gc_block);
+            if(gc_block->words.s && !mcode_value_in_range(gc_block->values.s, 0, 1))
+                state = Status_GcodeValueOutOfRange;
+            gc_block->words.i = gc_block->words.s = Off;
+            break;
+
         case Trinamic_StepperCurrent:
-            if(check_params(gc_block)) {
-                state = Status_OK;
+            if(mcode_validate_axis_values(gc_block)) {
+                state = mcode_validate_index(gc_block);
                 gc_block->user_mcode_sync = true;
                 if(!gc_block->words.q)
                     gc_block->values.q = NAN;
@@ -1611,44 +1634,43 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block)
             break;
 
         case Trinamic_HybridThreshold:
-            if(check_params(gc_block)) {
-                state = Status_OK;
+            if(mcode_validate_axis_values(gc_block)) {
+                state = mcode_validate_index(gc_block);
                 gc_block->user_mcode_sync = true;
             }
             break;
 
         case Trinamic_HomingSensitivity:
-            if(check_params(gc_block)) {
+            if(mcode_validate_axis_values(gc_block)) {
+
                 uint_fast8_t idx = N_AXIS;
-                state = gc_block->words.i && (isnanf(gc_block->values.ijk[0]) || gc_block->values.ijk[0] != 1.0f) ? Status_BadNumberFormat : Status_OK;
-                gc_block->words.i = Off;
-                if(state == Status_OK) do {
+
+                if((state = mcode_validate_index(gc_block)) == Status_OK) do {
                     idx--;
 #if TMC_STALLGUARD == 4
-                    if(!isnanf(gc_block->values.xyz[idx]) && (gc_block->values.xyz[idx] < 0.0f || gc_block->values.xyz[idx] > 255.0f))
-                        state = Status_BadNumberFormat;
+                    if(!isnanf(gc_block->values.xyz[idx]) && !mcode_value_in_range(gc_block->values.xyz[idx], 0, 255))
+                        state = Status_GcodeValueOutOfRange;
 #else
-                    if(!isnanf(gc_block->values.xyz[idx]) && (gc_block->values.xyz[idx] < -64.0f || gc_block->values.xyz[idx] > 63.0f))
-                        state = Status_BadNumberFormat;
+                    if(!isnanf(gc_block->values.xyz[idx]) && !mcode_value_in_range(gc_block->values.xyz[idx], -64, 63))
+                        state = Status_GcodeValueOutOfRange;
 #endif
                 } while(idx && state == Status_OK);
             }
             break;
 
         case Trinamic_ChopperTiming:
-            if(check_params(gc_block)) {
-                state = Status_OK;
-                if(gc_block->words.o && (gc_block->values.o < 1 || gc_block->values.ijk[0] > 15))
-                    state = Status_BadNumberFormat;
-                if(gc_block->words.p && (!isintf(gc_block->values.p) || gc_block->values.p < -3.0f || gc_block->values.p > 12.0f))
-                    state = Status_BadNumberFormat;
-                if(gc_block->words.s && (!isintf(gc_block->values.s) || gc_block->values.s < 1.0f || gc_block->values.ijk[0] > 8.0f))
-                    state = Status_BadNumberFormat;
-                gc_block->words.o = gc_block->words.p = gc_block->words.s = Off;
-            }
+            mcode_get_axis_mask(&gc_block->words);
+            state = mcode_validate_index(gc_block);
+            if(gc_block->words.o && (gc_block->values.o < 1 || gc_block->values.o > 15)) // toff
+                state = Status_GcodeValueOutOfRange;
+            if(gc_block->words.p && !mcode_value_in_range(gc_block->values.p, -3, 12)) // hend
+                state = Status_GcodeValueOutOfRange;
+            if(gc_block->words.s && !mcode_value_in_range(gc_block->values.s, 1, 8)) // hstrt
+                state = Status_GcodeValueOutOfRange;
+            gc_block->words.i = gc_block->words.o = gc_block->words.p = gc_block->words.s = Off;
             break;
 
-    default:
+        default:
             state = Status_Unhandled;
             break;
     }
@@ -1656,47 +1678,113 @@ static status_code_t trinamic_MCodeValidate (parser_block_t *gc_block)
     return state == Status_Unhandled && user_mcode.validate ? user_mcode.validate(gc_block) : state;
 }
 
+static void mcode_run (parser_block_t *gc_block, mcode_run_callback_ptr callback)
+{
+    uint_fast8_t idx, axis, motor;
+    axes_signals_t axes = mcode_get_axis_mask(&gc_block->words);
+
+    for(idx = 0; idx < n_motors; idx++) {
+        axis = motor_map[idx].axis;
+        motor = motor_map[idx].id;
+        if(bit_istrue(axes.mask, bit(axis))) {
+            if(!gc_block->words.i || (gc_block->values.ijk[0] == 0.0f ? motor == axis : motor != axis)) {
+                callback(gc_block, motor, true);
+            }
+        } else if(axes.mask == 0)
+            callback(gc_block, motor, false);
+    }
+}
+
+#if TRINAMIC_DEV
+
+static void m123_read_register (parser_block_t *gc_block, uint8_t motor, bool axis_words)
+{
+    uint32_t reg;
+
+    stepper[motor]->read_register(motor, (uint8_t)gc_block->values.r, &reg);
+    sprintf(sbuf, "[TMCREG:%d:0x%02X:%02X:%02X:%02X]" ASCII_EOL, (uint8_t)gc_block->values.r, (uint8_t)(reg >> 24), (uint8_t)((reg >> 16) & 0xFF), (uint8_t)((reg >> 8) & 0xFF), (uint8_t)(reg & 0xFF));
+    hal.stream.write(sbuf);
+}
+
+static void m124_write_register (parser_block_t *gc_block, uint8_t motor, bool axis_words)
+{
+    stepper[motor]->write_register(motor, (uint8_t)gc_block->values.r, gc_block->values.o);
+}
+
+#endif
+
+static void m569_mode_toggle (parser_block_t *gc_block, uint8_t motor, bool axis_words)
+{
+    if(axis_words) {
+        if((gc_block->words.s ? gc_block->values.s == 0.0f : stepper[motor]->get_en_pwm_mode(motor)))
+            stepper[motor]->coolstep_enable(motor);
+        else
+            stepper[motor]->stealthchop_enable(motor);
+    } else {
+        sprintf(sbuf, "[%s stepper mode: %s]" ASCII_EOL, get_axisname(motor_map[motor]), stepper[motor]->get_en_pwm_mode(motor) ? "StealthChop" : "CoolStep");
+        hal.stream.write(sbuf);
+    }
+}
+
+static void m906_stepper_current (parser_block_t *gc_block, uint8_t motor, bool axis_words)
+{
+    uint8_t axis = motor_map[motor].axis;
+
+    stepper[motor]->set_current(motor, (uint16_t)gc_block->values.xyz[axis],
+                                          isnanf(gc_block->values.q) ? trinamic.driver[axis].hold_current_pct : (uint8_t)gc_block->values.q);
+}
+
+static void m913_hybrid_threshold (parser_block_t *gc_block, uint8_t motor, bool axis_words)
+{
+    uint8_t axis = motor_map[motor].axis;
+
+    stepper[motor]->set_current(motor, (uint16_t)gc_block->values.xyz[axis],
+                                          isnanf(gc_block->values.q) ? trinamic.driver[axis].hold_current_pct : (uint8_t)gc_block->values.q);
+}
+
+static void m914_homing_sensitivity (parser_block_t *gc_block, uint8_t motor, bool axis_words)
+{
+    uint8_t axis = motor_map[motor].axis;
+
+    if(!isnanf(gc_block->values.xyz[axis])) {
+        trinamic.driver[axis].homing_seek_sensitivity = (int16_t)gc_block->values.xyz[axis];
+        stepper[motor]->sg_filter(motor, report.sfilt);
+        stepper[motor]->sg_stall_value(motor, trinamic.driver[axis].homing_seek_sensitivity);
+    }
+}
+
+static void m919_chopper_timing (parser_block_t *gc_block, uint8_t motor, bool axis_words)
+{
+    if(axis_words) {
+        m919_chopconf[motor].toff = gc_block->words.o ? (uint8_t)gc_block->values.o : cfg_params->chopconf.toff;
+        m919_chopconf[motor].hend = gc_block->words.p ? (int8_t)gc_block->values.p + 3 : cfg_params->chopconf.hend;
+        m919_chopconf[motor].hstrt = gc_block->words.s ? (uint8_t)gc_block->values.s - 1 : cfg_params->chopconf.hstrt;
+        stepper[motor]->chopper_timing(motor, m919_chopconf[motor]);
+    } else {
+        TMC_chopconf_t chopconf = stepper[motor]->get_chopconf(motor);
+        sprintf(sbuf, "[%s chopper .toff: %d .hend: %d .hstrt: %d]" ASCII_EOL, get_axisname(motor_map[motor]), chopconf.toff, chopconf.hend - 3, chopconf.hstrt + 1);
+        hal.stream.write(sbuf);
+    }
+}
+
 // Execute driver specific M-code
-static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block)
+static void mcode_execute (uint_fast16_t state, parser_block_t *gc_block)
 {
     bool handled = true;
-    uint_fast8_t motor = n_motors;
 
     switch(gc_block->user_mcode) {
 
 #if TRINAMIC_DEV
 
         case Trinamic_ReadRegister:
-            {
-                uint32_t value;
-                uint_fast8_t axis, index = gc_block->words.i ? (uint8_t)gc_block->values.ijk[0] : 0;
-                axes_signals_t axes = get_axes(gc_block->words);
-                do {
-                    axis = motor_map[--motor].axis;
-                    if(bit_istrue(axes.mask, bit(axis)) && index ? axis != motor_map[motor].id : axis == motor_map[motor].id) {
-                        stepper[motor]->read_register(motor, (uint8_t)gc_block->values.r, &value);
-                        sprintf(sbuf, "[TMCREG:%d:%lx]" ASCII_EOL, (uint8_t)gc_block->values.r, value);
-                        hal.stream.write(sbuf);
-                    }
-                } while(motor);
-            }
+            mcode_run(gc_block, m123_read_register);
             break;
 
         case Trinamic_WriteRegister:
-            {
-                // NOTE: gcode parser has to be changed to allow reading full range uint32_t value into the O word!
-                uint_fast8_t axis, index = gc_block->words.i ? (uint8_t)gc_block->values.ijk[0] : 0;
-                axes_signals_t axes = get_axes(gc_block->words);
-                do {
-                    axis = motor_map[--motor].axis;
-                    if(bit_istrue(axes.mask, bit(axis)) && index ? axis != motor_map[motor].id : axis == motor_map[motor].id) {
-                        stepper[motor]->write_register(motor, (uint8_t)gc_block->values.r, gc_block->values.o);
-                    }
-                } while(motor);
-            }
+            mcode_run(gc_block, m124_write_register);
             break;
 
-#endif
+#endif // TRINAMIC_DEV
 
         case Trinamic_DebugReport:
             {
@@ -1713,7 +1801,8 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                     return;
                 }
 
-                axes_signals_t axes = {0};
+                uint_fast8_t motor = n_motors;
+                axes_signals_t axes = mcode_get_axis_mask(&gc_block->words);
                 bool write_report = !(gc_block->words.i || gc_block->words.s || gc_block->words.h || gc_block->words.q);
 
                 if(!write_report) {
@@ -1730,26 +1819,6 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                     if(gc_block->words.s)
                         report.sg_status_enable = gc_block->values.s != 0.0f;
                 }
-
-                axes.x = gc_block->words.x;
-                axes.y = gc_block->words.y;
-                axes.z = gc_block->words.z;
-    #ifdef A_AXIS
-                axes.a = gc_block->words.a;
-    #endif
-    #ifdef B_AXIS
-                axes.b = gc_block->words.b;
-    #endif
-    #ifdef C_AXIS
-                axes.c = gc_block->words.c;
-    #endif
-    #ifdef U_AXIS
-                axes.u = gc_block->words.u;
-    #endif
-    #ifdef V_AXIS
-                axes.v = gc_block->words.v;
-    #endif
-                axes.mask &= driver_enabled.mask;
 
                 if(!write_report) {
 
@@ -1784,7 +1853,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
                         report.msteps = trinamic.driver[report.sg_status_motor].microsteps;
                         if(hal_stepper_pulse_start == NULL) {
                             hal_stepper_pulse_start = hal.stepper.pulse_start;
-                            hal.stepper.pulse_start = stepper_pulse_start;
+                            hal.stepper.pulse_start = stepperPulseStart;
                         }
 
                         motor = n_motors;
@@ -1806,17 +1875,19 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
             }
             break;
 
+        case Trinamic_ModeToggle:
+            mcode_run(gc_block, m569_mode_toggle);
+            break;
+
         case Trinamic_StepperCurrent:
-            do {
-                if(!isnanf(gc_block->values.xyz[motor_map[--motor].axis]))
-                    stepper[motor]->set_current(motor, (uint16_t)gc_block->values.xyz[motor_map[motor].axis],
-                                                      isnanf(gc_block->values.q) ? trinamic.driver[motor_map[motor].axis].hold_current_pct : (uint8_t)gc_block->values.q);
-            } while(motor);
+            mcode_run(gc_block, m906_stepper_current);
             break;
 
         case Trinamic_ReportPrewarnFlags:
             {
+                uint_fast8_t motor;
                 TMC_drv_status_t status;
+
                 strcpy(sbuf, "[TMCPREWARN:");
                 for(motor = 0; motor < n_motors; motor++) {
                     if(bit_istrue(driver_enabled.mask, bit(motor_map[motor].axis))) {
@@ -1842,53 +1913,15 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
             break;
 
         case Trinamic_HybridThreshold:
-            {
-                uint_fast8_t axis;
-                do {
-                    axis = motor_map[--motor].axis;
-                    if(!isnanf(gc_block->values.xyz[axis]) && stepper[motor]->set_tpwmthrs) // mm/min
-                        stepper[motor]->set_tpwmthrs(motor, gc_block->values.xyz[axis] / 60.0f, settings.axis[axis].steps_per_mm);
-                } while(motor);
-            }
+            mcode_run(gc_block, m913_hybrid_threshold);
             break;
 
         case Trinamic_HomingSensitivity:
-            {
-                uint_fast8_t axis;
-                do {
-                    axis = motor_map[--motor].axis;
-                    if(!isnanf(gc_block->values.xyz[axis])) {
-                        trinamic.driver[axis].homing_seek_sensitivity = (int16_t)gc_block->values.xyz[axis];
-                        stepper[motor]->sg_filter(motor, report.sfilt);
-                        stepper[motor]->sg_stall_value(motor, trinamic.driver[axis].homing_seek_sensitivity);
-                    }
-                } while(motor);
-            }
+            mcode_run(gc_block, m914_homing_sensitivity);
             break;
 
         case Trinamic_ChopperTiming:
-            {
-                uint_fast8_t axis;
-                trinamic_chopconf_t timing;
-
-                timing.value = cfg_params->chopconf.value; // TDODO: keep per axis config?
-
-                if(gc_block->words.o)
-                    timing.toff = (uint8_t)gc_block->values.o;
-
-                if(gc_block->words.p)
-                    timing.hend = (int8_t)gc_block->values.p + 3;
-
-                if(gc_block->words.s)
-                    timing.hstrt = (uint8_t)gc_block->values.s;
-
-                do {
-                    axis = motor_map[--motor].axis;
-                    if(!isnanf(gc_block->values.xyz[axis])) {
-                        stepper[motor]->chopper_timing(motor, timing);
-                    }
-                } while(motor);
-            }
+            mcode_run(gc_block, m919_chopper_timing);
             break;
 
         default:
@@ -1903,7 +1936,7 @@ static void trinamic_MCodeExecute (uint_fast16_t state, parser_block_t *gc_block
 
 #if TRINAMIC_I2C
 
-static void trinamic_stepper_enable (axes_signals_t enable)
+static void stepperEnable (axes_signals_t enable)
 {
     enable.mask ^= settings.steppers.enable_invert.mask;
 
@@ -1942,7 +1975,7 @@ static limit_signals_t trinamic_limits (void)
     return signals;
 }
 
-#endif
+#endif // TMC_POLL_STALLED
 
 // Configure sensorless homing for enabled axes
 static void trinamic_on_homing (axes_signals_t axes, float feedrate, homing_mode_t mode)
@@ -1978,7 +2011,7 @@ static void trinamic_on_homing (axes_signals_t axes, float feedrate, homing_mode
 // Get homing rate for the homing cycle.
 // NOTE: if more than one axis is homed in the cycle all axes has to be configured with
 //       the same feedrates or the cycle will be skipped.
-static float trinamic_get_homing_rate (axes_signals_t axes, homing_mode_t mode)
+static float homingGetFeedrate (axes_signals_t axes, homing_mode_t mode)
 {
     axes.mask &= (driver_enabled.mask & trinamic.homing_enable.mask);
 
@@ -2017,7 +2050,7 @@ static float trinamic_get_homing_rate (axes_signals_t axes, homing_mode_t mode)
 }
 
 // Enable/disable sensorless homing
-static void trinamic_homing (bool on, axes_signals_t homing_cycle)
+static void limitsEnable (bool on, axes_signals_t homing_cycle)
 {
 #ifdef TMC_HOMING_ACCELERATION
     static float accel[N_AXIS];
@@ -2150,7 +2183,7 @@ static void write_debug_report (uint_fast8_t axes)
         sprintf(sbuf, "%-15s", "Peak current");
         for(motor = 0; motor < n_motors; motor++) {
             if(bit_istrue(axes, bit(motor_map[motor].axis)))
-                sprintf(append(sbuf), "%8" UINT32SFMT, (uint32_t)((float)debug_report[motor].current * sqrtf(2)));
+                sprintf(append(sbuf), "%8" UINT32SFMT, (uint32_t)((float)debug_report[motor].current * 1.41421f));
         }
         write_line(sbuf);
 
@@ -2194,9 +2227,10 @@ static void write_debug_report (uint_fast8_t axes)
         sprintf(sbuf, "%-15s", "vsense");
         for(motor = 0; motor < n_motors; motor++) {
             if(bit_istrue(axes, bit(motor_map[motor].axis))) {
-                if(stepper[motor]->vsense)
-                    sprintf(append(sbuf), "%8s", stepper[motor]->vsense(motor) ? "1=0.180" : "0=0.325");
-                else
+                if(stepper[motor]->vsense) {
+                    uint_fast8_t idx = stepper[motor]->vsense(motor);
+                    sprintf(append(sbuf), "%2d=%.3f", idx, vsense[idx]);
+                } else
                     sprintf(append(sbuf), "%8s", "N/A");
             }
         }
@@ -2421,7 +2455,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.19");
+    	report_plugin("Trinamic", "0.20");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
@@ -2438,7 +2472,7 @@ static void assign_motors (motor_map_t motor)
     motor_map[n_motors++].value = motor.value;
 }
 
-static bool on_driver_setup (settings_t *settings)
+static bool onDriverSetup (settings_t *settings)
 {
     bool ok;
 
@@ -2452,6 +2486,18 @@ static bool on_driver_setup (settings_t *settings)
 
 bool trinamic_init (void)
 {
+    static setting_details_t settings_details = {
+        .settings = trinamic_settings,
+        .n_settings = sizeof(trinamic_settings) / sizeof(setting_detail_t),
+#ifndef NO_SETTINGS_DESCRIPTIONS
+        .descriptions = trinamic_settings_descr,
+        .n_descriptions = sizeof(trinamic_settings_descr) / sizeof(setting_descr_t),
+#endif
+        .load = trinamic_settings_load,
+        .save = trinamic_settings_save,
+        .restore = trinamic_settings_restore
+    };
+
     if(hal.stepper.motor_iterator) {
         hal.stepper.motor_iterator(count_motors);
         if((motor_map = malloc(n_motors * sizeof(motor_map_t)))) {
@@ -2475,32 +2521,32 @@ bool trinamic_init (void)
 
         memcpy(&user_mcode, &grbl.user_mcode, sizeof(user_mcode_ptrs_t));
 
-        grbl.user_mcode.check = trinamic_MCodeCheck;
-        grbl.user_mcode.validate = trinamic_MCodeValidate;
-        grbl.user_mcode.execute = trinamic_MCodeExecute;
+        grbl.user_mcode.check = mcode_check;
+        grbl.user_mcode.validate = mcode_validate;
+        grbl.user_mcode.execute = mcode_execute;
 
         on_realtime_report = grbl.on_realtime_report;
-        grbl.on_realtime_report = trinamic_realtime_report;
+        grbl.on_realtime_report = onRealtimeReport;
 
         on_report_options = grbl.on_report_options;
         grbl.on_report_options = onReportOptions;
 
         driver_setup = hal.driver_setup;
-        hal.driver_setup = on_driver_setup;
+        hal.driver_setup = onDriverSetup;
 
         settings_changed = hal.settings_changed;
-        hal.settings_changed = on_settings_changed;
+        hal.settings_changed = onSettingsChanged;
 
         limits_enable = hal.limits.enable;
-        hal.limits.enable = trinamic_homing;
+        hal.limits.enable = limitsEnable;
 
-        hal.homing.get_feedrate = trinamic_get_homing_rate;
+        hal.homing.get_feedrate = homingGetFeedrate;
 
         settings_register(&settings_details);
 
 #if TRINAMIC_I2C
         stepper_enable = hal.stepper.enable;
-        hal.stepper.enable = trinamic_stepper_enable;
+        hal.stepper.enable = stepperEnable;
 #endif
     }
 
@@ -2528,4 +2574,4 @@ void trinamic_warn_handler (void)
 }
 #endif
 
-#endif
+#endif // TRINAMIC_ENABLE

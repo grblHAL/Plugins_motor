@@ -38,6 +38,10 @@
 #define TRINAMIC_DEFAULT_MICROSTEPS 16
 #endif
 
+#ifndef TRINAMIC_EXTENDED_SETTINGS
+#define TRINAMIC_EXTENDED_SETTINGS 0
+#endif
+
 #if TRINAMIC_ENABLE == 2130
 #ifndef R_SENSE
 #define R_SENSE 110
@@ -85,6 +89,10 @@
 
 #ifndef TMC_STEALTHCHOP
 #define TMC_STEALTHCHOP             0    // 0 = CoolStep, 1 = StealthChop
+#endif
+
+#if TMC_STEALTHCHOP > 0 && TRINAMIC_ENABLE == 2660
+#error "TMC2660 does not support StealthChop mode"
 #endif
 
 #if TRINAMIC_ENABLE == 2209
@@ -313,9 +321,6 @@
 
 #endif
 
-//#define TRINAMIC_EXTENDED_SETTINGS 1
-//
-
 typedef struct {
     uint16_t current; // mA
     uint8_t hold_current_pct;
@@ -332,7 +337,7 @@ typedef struct {
     axes_signals_t driver_enable;
     axes_signals_t homing_enable;
     motor_settings_t driver[N_AXIS];
-#ifdef TRINAMIC_EXTENDED_SETTINGS
+#if TRINAMIC_EXTENDED_SETTINGS
     trinamic_cfg_t cfg_params;
 #endif
 } trinamic_settings_t;
