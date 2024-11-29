@@ -400,7 +400,7 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
 #endif
 
 #if TRINAMIC_DYNAMIC_CURRENT
-    reduced_current[motor.id] = cfg.settings->current * cfg.settings->hold_current_pct / 100;;
+    reduced_current[motor.id] = cfg.settings->current * cfg.settings->hold_current_pct / 100;
 #endif
 
     if(driver_if.on_driver_postinit)
@@ -961,10 +961,10 @@ static const setting_descr_t trinamic_settings_descr[] = {
     },
     { TMCsetting_HomingFeedSensitivity, "StallGuard threshold for slow (feed) homing phase." },
     { Setting_AxisHomingFeedRate, "Feed rate to slowly engage limit switch to determine its location accurately.\\n"
-                                  "NOTE: only used for axes with Trinamic driver enabled, others use the $24 setting."
+                                  "NOTE: only used for axes with Trinamic driver and sensorless homing enabled, others use the $24 setting."
     },
     { Setting_AxisHomingSeekRate, "Seek rate to quickly find the limit switch before the slower locating phase.\\n"
-                                  "NOTE: only used for axes with Trinamic driver enabled, others use the $25 setting."
+                                  "NOTE: only used for axes with Trinamic driver and sensorless homing enabled, others use the $25 setting."
     },
 #if TRINAMIC_EXTENDED_SETTINGS
     { TMCsetting_Chopconf_TOFF, "Off time. Duration of slow decay phase as a multiple of system clock periods: NCLK= 24 + (32 x TOFF). This will limit the maximum chopper frequency (0-15).\\n"
