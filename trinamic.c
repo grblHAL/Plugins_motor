@@ -1519,7 +1519,7 @@ static bool mcode_validate_axis_values (parser_block_t *gc_block)
         idx--;
         if(gc_block->words.mask & wordmap[idx].mask) {
             n_found++;
-            if(bit_istrue(driver_enabled.mask, bit(idx)) && !isnanf(gc_block->values.xyz[idx])) {
+            if(bit_istrue(driver_enabled.mask, bit(idx)) && !isnan(gc_block->values.xyz[idx])) {
                 n_ok++;
                 gc_block->words.mask &= ~wordmap[idx].mask;
             }
@@ -1597,10 +1597,10 @@ static status_code_t mcode_validate (parser_block_t *gc_block)
             if(gc_block->words.h && gc_block->values.h > 1)
                 state = Status_BadNumberFormat;
 
-            if(gc_block->words.q && isnanf(gc_block->values.q))
+            if(gc_block->words.q && isnan(gc_block->values.q))
                 state = Status_BadNumberFormat;
 
-            if(gc_block->words.s && isnanf(gc_block->values.s))
+            if(gc_block->words.s && isnan(gc_block->values.s))
                 state = Status_BadNumberFormat;
 
             gc_block->words.h = gc_block->words.i = gc_block->words.q = gc_block->words.s = Off;
@@ -1648,10 +1648,10 @@ static status_code_t mcode_validate (parser_block_t *gc_block)
                 if((state = mcode_validate_index(gc_block)) == Status_OK) do {
                     idx--;
 #if TMC_STALLGUARD == 4
-                    if(!isnanf(gc_block->values.xyz[idx]) && !mcode_value_in_range(gc_block->values.xyz[idx], 0, 255))
+                    if(!mcode_value_in_range(gc_block->values.xyz[idx], 0, 255))
                         state = Status_GcodeValueOutOfRange;
 #else
-                    if(!isnanf(gc_block->values.xyz[idx]) && !mcode_value_in_range(gc_block->values.xyz[idx], -64, 63))
+                    if(!mcode_value_in_range(gc_block->values.xyz[idx], -64, 63))
                         state = Status_GcodeValueOutOfRange;
 #endif
                 } while(idx && state == Status_OK);
@@ -1731,7 +1731,7 @@ static void m906_stepper_current (parser_block_t *gc_block, uint8_t motor, bool 
     uint8_t axis = motor_map[motor].axis;
 
     stepper[motor]->set_current(motor, (uint16_t)gc_block->values.xyz[axis],
-                                          isnanf(gc_block->values.q) ? trinamic.driver[axis].hold_current_pct : (uint8_t)gc_block->values.q);
+                                          isnan(gc_block->values.q) ? trinamic.driver[axis].hold_current_pct : (uint8_t)gc_block->values.q);
 }
 
 static void m913_hybrid_threshold (parser_block_t *gc_block, uint8_t motor, bool axis_words)
@@ -1739,14 +1739,14 @@ static void m913_hybrid_threshold (parser_block_t *gc_block, uint8_t motor, bool
     uint8_t axis = motor_map[motor].axis;
 
     stepper[motor]->set_current(motor, (uint16_t)gc_block->values.xyz[axis],
-                                          isnanf(gc_block->values.q) ? trinamic.driver[axis].hold_current_pct : (uint8_t)gc_block->values.q);
+                                          isnan(gc_block->values.q) ? trinamic.driver[axis].hold_current_pct : (uint8_t)gc_block->values.q);
 }
 
 static void m914_homing_sensitivity (parser_block_t *gc_block, uint8_t motor, bool axis_words)
 {
     uint8_t axis = motor_map[motor].axis;
 
-    if(!isnanf(gc_block->values.xyz[axis])) {
+    if(!isnan(gc_block->values.xyz[axis])) {
         trinamic.driver[axis].homing_seek_sensitivity = (int16_t)gc_block->values.xyz[axis];
         stepper[motor]->sg_filter(motor, report.sfilt);
         stepper[motor]->sg_stall_value(motor, trinamic.driver[axis].homing_seek_sensitivity);
