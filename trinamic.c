@@ -591,14 +591,6 @@ static status_code_t set_axis_setting_float (setting_id_t setting, float value)
 
     switch(settings_get_axis_base(setting, &idx)) {
 
-        case Setting_AxisHomingFeedRate:
-            trinamic.driver[idx].homing_feed_rate = value;
-            break;
-
-        case Setting_AxisHomingSeekRate:
-            trinamic.driver[idx].homing_seek_rate = value;
-            break;
-
         case TMCsetting_HomingSeekSensitivity:
             trinamic.driver[idx].homing_seek_sensitivity = (int16_t)value;
             break;
@@ -622,14 +614,6 @@ static float get_axis_setting_float (setting_id_t setting)
     uint_fast8_t idx;
 
     switch(settings_get_axis_base(setting, &idx)) {
-
-        case Setting_AxisHomingFeedRate:
-            value = trinamic.driver[idx].homing_feed_rate;
-            break;
-
-        case Setting_AxisHomingSeekRate:
-            value = trinamic.driver[idx].homing_seek_rate;
-            break;
 
         case TMCsetting_HomingSeekSensitivity:
             value = (float)trinamic.driver[idx].homing_seek_sensitivity;
@@ -915,8 +899,6 @@ static const setting_detail_t trinamic_settings[] = {
     { Setting_TrinamicHoming, Group_MotorDriver, "Sensorless homing", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCore, &trinamic.homing_enable.mask, NULL, NULL },
     { Setting_AxisStepperCurrent, Group_Axis0, "-axis motor current", "mA", Format_Integer, "###0", min_current, max_current, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
     { Setting_AxisMicroSteps, Group_Axis0, "-axis microsteps", "steps", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
-    { Setting_AxisHomingFeedRate, Group_Axis0, "-axis homing locate feed rate", "mm/min", Format_Decimal, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
-    { Setting_AxisHomingSeekRate, Group_Axis0, "-axis homing search seek rate", "mm/min", Format_Decimal, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
 #if TMC_STALLGUARD == 4
     { TMCsetting_HomingSeekSensitivity, Group_Axis0, "-axis StallGuard4 fast threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
 #else
@@ -960,12 +942,6 @@ static const setting_descr_t trinamic_settings_descr[] = {
                              "NOTE: if grblHAL is configured to disable motors on standstill this setting has no use."
     },
     { TMCsetting_HomingFeedSensitivity, "StallGuard threshold for slow (feed) homing phase." },
-    { Setting_AxisHomingFeedRate, "Feed rate to slowly engage limit switch to determine its location accurately.\\n"
-                                  "NOTE: only used for axes with Trinamic driver and sensorless homing enabled, others use the $24 setting."
-    },
-    { Setting_AxisHomingSeekRate, "Seek rate to quickly find the limit switch before the slower locating phase.\\n"
-                                  "NOTE: only used for axes with Trinamic driver and sensorless homing enabled, others use the $25 setting."
-    },
 #if TRINAMIC_EXTENDED_SETTINGS
     { TMCsetting_Chopconf_TOFF, "Off time. Duration of slow decay phase as a multiple of system clock periods: NCLK= 24 + (32 x TOFF). This will limit the maximum chopper frequency (0-15).\\n"
                                 "0: MOSFETs shut off, driver disabled.\\n"
@@ -1217,11 +1193,7 @@ static void trinamic_settings_restore (void)
 #endif
         }
 
-        trinamic.driver[idx].homing_seek_rate = DEFAULT_HOMING_SEEK_RATE;
-        trinamic.driver[idx].homing_feed_rate = DEFAULT_HOMING_FEED_RATE;
-
     } while(idx);
-
 
     trinamic_settings_get_defaults(false);
 
@@ -1459,22 +1431,6 @@ static char *get_axisname (motor_map_t motor)
 
     return axisname;
 }
-
-#if TRINAMIC_DEV
-
-static uint_fast8_t bit_count (uint32_t n)
-{
-    uint_fast8_t count = 0;
-
-    while (n) {
-        n &= (n - 1);
-        count++;
-    }
-
-    return count;
-}
-
-#endif
 
 static const parameter_words_t wordmap[] = {
    { .x = On },
@@ -1859,7 +1815,7 @@ static void mcode_execute (uint_fast16_t state, parser_block_t *gc_block)
                         motor = n_motors;
                         do {
                             if((axis = motor_map[--motor].axis) == report.sg_status_motor) {
-                                stepper[motor]->stallguard_enable(motor, settings.homing.feed_rate, settings.axis[axis].steps_per_mm, trinamic.driver[motor_map[motor].axis].homing_seek_sensitivity);
+                                stepper[motor]->stallguard_enable(motor, settings.axis[axis].homing_feed_rate, settings.axis[axis].steps_per_mm, trinamic.driver[motor_map[motor].axis].homing_seek_sensitivity);
                                 stepper[motor]->sg_filter(motor, report.sfilt);
                                 if(stepper[motor]->set_thigh_raw) // TODO: TMC2209 and TMC2260 do not have this...
                                     stepper[motor]->set_thigh_raw(motor, 0);
@@ -2006,47 +1962,6 @@ static void trinamic_on_homing (axes_signals_t axes, float feedrate, homing_mode
                 break;
         }
     } while(motor);
-}
-
-// Get homing rate for the homing cycle.
-// NOTE: if more than one axis is homed in the cycle all axes has to be configured with
-//       the same feedrates or the cycle will be skipped.
-static float homingGetFeedrate (axes_signals_t axes, homing_mode_t mode)
-{
-    axes.mask &= (driver_enabled.mask & trinamic.homing_enable.mask);
-
-    if(!axes.mask /*?? || mode == HomingMode_Pulloff*/)
-        return mode == HomingMode_Locate ? settings.homing.feed_rate : settings.homing.seek_rate;
-
-    uint_fast8_t motor = n_motors, axis;
-    float feed_rate = 0.0f, seek_rate = 0.0f;
-
-    do {
-        axis = motor_map[--motor].axis;
-        if(bit_istrue(axes.mask, bit(axis))) {
-
-            float feed_rate_cfg = trinamic.driver[axis].homing_feed_rate,
-                  seek_rate_cfg = trinamic.driver[axis].homing_seek_rate;
-
-            if(feed_rate == 0.0f) {
-                feed_rate = feed_rate_cfg;
-                seek_rate = seek_rate_cfg;
-            } else if(!(feed_rate == feed_rate_cfg && seek_rate == seek_rate_cfg)) {
-                feed_rate = seek_rate = 0.0f;
-                break;
-            }
-        } else {
-            if(feed_rate == 0.0f) {
-                feed_rate = settings.homing.feed_rate;
-                seek_rate = settings.homing.seek_rate;
-            } else if(!(feed_rate == settings.homing.feed_rate && seek_rate == settings.homing.seek_rate)) {
-                feed_rate = seek_rate = 0.0f;
-                break;
-            }
-        }
-    } while(motor);
-
-    return mode == HomingMode_Locate ? feed_rate : seek_rate;
 }
 
 // Enable/disable sensorless homing
@@ -2455,7 +2370,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.20");
+    	report_plugin("Trinamic", "0.21");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
@@ -2539,8 +2454,6 @@ bool trinamic_init (void)
 
         limits_enable = hal.limits.enable;
         hal.limits.enable = limitsEnable;
-
-        hal.homing.get_feedrate = homingGetFeedrate;
 
         settings_register(&settings_details);
 

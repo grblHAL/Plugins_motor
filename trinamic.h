@@ -327,8 +327,6 @@ typedef struct {
     uint16_t r_sense; // mOhm
     uint16_t microsteps;
     trinamic_mode_t mode;
-    float homing_seek_rate;
-    float homing_feed_rate;
     int16_t homing_seek_sensitivity;
     int16_t homing_feed_sensitivity;
 } motor_settings_t;
