@@ -2399,6 +2399,13 @@ static bool onDriverSetup (settings_t *settings)
     return ok;
 }
 
+bool trinamic_drivers_reinit (void)
+{
+    trinamic_drivers_init(trinamic.driver_enable);
+
+    return true;
+}
+
 bool trinamic_init (void)
 {
     static setting_details_t settings_details = {

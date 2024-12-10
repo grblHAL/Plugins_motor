@@ -356,6 +356,7 @@ typedef struct {
 } trinamic_driver_if_t;
 
 bool trinamic_init (void);
+bool trinamic_drivers_reinit (void);
 void trinamic_fault_handler (void);
 void trinamic_warn_handler (void);
 void trinamic_if_init (trinamic_driver_if_t *driver);
