@@ -48,22 +48,24 @@
 #endif
 #include "../trinamic/tmc2130hal.h"
 #endif
+
 #if TRINAMIC_ENABLE == 2209
 #ifndef R_SENSE
 #define R_SENSE 110
 #endif
-#ifdef TMC_STEALTHCHOP
-#undef TMC_STEALTHCHOP
-#endif
-#define TMC_STEALTHCHOP 0 // not supported
 #include "../trinamic/tmc2209hal.h"
 #endif
+
 #if TRINAMIC_ENABLE == 2660
 #ifndef R_SENSE
 #define R_SENSE 50
 #endif
+#ifndef TMC_STEALTHCHOP
+#define TMC_STEALTHCHOP 0 // not supported
+#endif
 #include "../trinamic/tmc2660hal.h"
 #endif
+
 #if TRINAMIC_ENABLE == 5160
 #ifndef R_SENSE
 #define R_SENSE 75
@@ -83,16 +85,8 @@
 #define PWM_THRESHOLD_VELOCITY      0 // mm/min - 0 to disable, should be set > homing seek rate when enabled (use M913 to set at run time)
 #endif
 
-#if PWM_THRESHOLD_VELOCITY > 0 && TRINAMIC_ENABLE == 2660
-#error "TMC2660 does not support PWM_THRESHOLD_VELOCITY"
-#endif
-
 #ifndef TMC_STEALTHCHOP
 #define TMC_STEALTHCHOP             0    // 0 = CoolStep, 1 = StealthChop
-#endif
-
-#if TMC_STEALTHCHOP > 0 && TRINAMIC_ENABLE == 2660
-#error "TMC2660 does not support StealthChop mode"
 #endif
 
 #if TRINAMIC_ENABLE == 2209
@@ -131,7 +125,19 @@
 
 //
 
+// Sanity checks
+
+#if TRINAMIC_ENABLE == 2660
+#if PWM_THRESHOLD_VELOCITY > 0
+#error "TMC2660 does not support PWM_THRESHOLD_VELOCITY"
+#endif
+#if TMC_STEALTHCHOP > 0
+#error "TMC2660 does not support StealthChop mode"
+#endif
+#endif // TRINAMIC_ENABLE == 2660
+
 // General
+
 #if TRINAMIC_MIXED_DRIVERS
 #ifndef TMC_X_ENABLE
 #define TMC_X_ENABLE 0
