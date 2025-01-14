@@ -3,7 +3,7 @@
 
   Part of grblHAL
 
-  Copyright (c) 2018-2024 Terje Io
+  Copyright (c) 2018-2025 Terje Io
 
   grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -819,7 +819,7 @@ static float get_extended_float (setting_id_t setting)
     return value;
 }
 
-static bool is_extended_available (const setting_detail_t *setting)
+static bool is_extended_available (const setting_detail_t *setting, uint_fast16_t offset)
 {
     bool ok = false;
 
@@ -2370,7 +2370,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.21");
+    	report_plugin("Trinamic", "0.22");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
