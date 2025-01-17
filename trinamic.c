@@ -104,6 +104,7 @@ static TMC_drv_status_t status[TMC_N_MOTORS_MAX];
 #endif
 #if TRINAMIC_DYNAMIC_CURRENT
 static uint16_t dynamic_current[TMC_N_MOTORS_MAX], reduced_current[TMC_N_MOTORS_MAX];
+static stepper_enable_ptr hal_stepper_enable = NULL;
 static stepper_pulse_start_ptr stepper_block_start = NULL;
 #endif
 
@@ -236,6 +237,24 @@ static void trinamic_poll_status (void *data)
 #endif // TRINAMIC_POLL_STATUS
 
 #if TRINAMIC_DYNAMIC_CURRENT
+
+static void dynamic_current_control (axes_signals_t enable, bool hold)
+{
+    uint_fast16_t axis = 0;
+    uint_fast8_t motor = n_motors;
+
+    if(hold) do {
+        if(stepper[--motor]) {
+            axis = motor_map[motor].axis;
+            if(bit_istrue(enable.mask, bit(axis)) && dynamic_current[motor] != reduced_current[motor]) {
+                dynamic_current[motor] = reduced_current[motor];
+                stepper[motor]->set_current(motor, dynamic_current[motor], trinamic.driver[axis].hold_current_pct);
+            }
+        }
+    } while(motor);
+
+    hal_stepper_enable(enable, hold);
+}
 
 static void set_current_for_block (void *block)
 {
@@ -450,6 +469,10 @@ static void trinamic_drivers_init (axes_signals_t axes)
         if(stepper_block_start == NULL) {
             stepper_block_start = hal.stepper.pulse_start;
             hal.stepper.pulse_start = dynamic_current_pulse_start;
+        }
+        if(hal_stepper_enable == NULL) {
+            hal_stepper_enable = hal.stepper.enable;
+            hal.stepper.enable = dynamic_current_control;
         }
 #endif
     }
@@ -904,7 +927,9 @@ static const setting_detail_t trinamic_settings[] = {
 #else
     { TMCsetting_HomingSeekSensitivity, Group_Axis0, "-axis StallGuard2 fast threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
 #endif
+#if TRINAMIC_ENABLE != 2660 || TRINAMIC_DYNAMIC_CURRENT
     { TMCsetting_HoldCurrentPct, Group_Axis0, "-axis hold current", "%", Format_Int8, "##0", "5", "100", Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
+#endif
 #if TMC_STALLGUARD == 4
     { TMCsetting_HomingFeedSensitivity, Group_Axis0, "-axis StallGuard4 slow threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
 #else
@@ -2112,7 +2137,11 @@ static void write_debug_report (uint_fast8_t axes)
         sprintf(sbuf, "%-15s", "Hold current");
         for(motor = 0; motor < n_motors; motor++) {
             if(bit_istrue(axes, bit(motor_map[motor].axis)))
+#if TRINAMIC_ENABLE == 2660 && !TRINAMIC_DYNAMIC_CURRENT
+                strcat(append(sbuf), "N/A");
+#else
                 sprintf(append(sbuf), "%5d/31", debug_report[motor].ihold_irun.ihold);
+#endif
         }
         write_line(sbuf);
 
@@ -2370,7 +2399,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.22");
+    	report_plugin("Trinamic", "0.23");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
