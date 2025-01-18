@@ -3,7 +3,7 @@
 
   Part of grblHAL
 
-  Copyright (c) 2018-2024 Terje Io
+  Copyright (c) 2018-2025 Terje Io
 
   grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -362,7 +362,6 @@ typedef struct {
 } trinamic_driver_if_t;
 
 bool trinamic_init (void);
-bool trinamic_drivers_reinit (void);
 void trinamic_fault_handler (void);
 void trinamic_warn_handler (void);
 void trinamic_if_init (trinamic_driver_if_t *driver);

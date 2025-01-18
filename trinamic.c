@@ -47,6 +47,10 @@
 #define TRINAMIC_POLL_INTERVAL 250
 #endif
 
+#ifndef TRINAMIC_STARTUP_TIMEOUT
+#define TRINAMIC_STARTUP_TIMEOUT 5000 // ms
+#endif
+
 #define TMCsetting_HomingSeekSensitivity    Setting_AxisExtended0
 #define TMCsetting_HoldCurrentPct           Setting_AxisExtended1
 #define TMCsetting_HomingFeedSensitivity    Setting_AxisExtended2
@@ -428,7 +432,7 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
     return true;
 }
 
-static void trinamic_drivers_init (axes_signals_t axes)
+static bool trinamic_drivers_init (axes_signals_t axes)
 {
     bool ok = axes.value != 0;
     uint_fast8_t motor = n_motors, n_enabled = 0, seq = 0;
@@ -477,9 +481,11 @@ static void trinamic_drivers_init (axes_signals_t axes)
 #endif
     }
 #endif
+
+    return axes.value == 0 || ok;
 }
 
-static void trinamic_drivers_setup (void)
+static bool trinamic_drivers_setup (void)
 {
     if(driver_if.on_drivers_init) {
 
@@ -493,7 +499,7 @@ static void trinamic_drivers_setup (void)
         driver_if.on_drivers_init(n_enabled, trinamic.driver_enable);
     }
 
-    trinamic_drivers_init(trinamic.driver_enable);
+    return trinamic_drivers_init(trinamic.driver_enable);
 }
 
 #if TRINAMIC_MIXED_DRIVERS
@@ -2399,7 +2405,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.23");
+    	report_plugin("Trinamic", "0.24");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
@@ -2419,20 +2425,29 @@ static void assign_motors (motor_map_t motor)
 static bool onDriverSetup (settings_t *settings)
 {
     bool ok;
+    int32_t timeout = TRINAMIC_STARTUP_TIMEOUT;
 
-    if((ok = driver_setup(settings))) {
-        hal.delay_ms(100, NULL); // Allow time for drivers to boot
-        trinamic_drivers_setup();
-    }
+    if((ok = driver_setup(settings))) do {
+        hal.delay_ms(100, NULL);
+        timeout -= 100;
+    } while(timeout > 0 && !trinamic_drivers_setup());
 
     return ok;
 }
 
-bool trinamic_drivers_reinit (void)
+static stepper_status_t trinamic_driver_status (bool reset)
 {
-    trinamic_drivers_init(trinamic.driver_enable);
+    stepper_status_t status = {};
 
-    return true;
+    // TODO: report more comprehensive state if called for
+
+    if(reset) {
+        if(!trinamic_drivers_init(trinamic.driver_enable))
+            status.fault.details.a.mask = trinamic.driver_enable.mask;
+    } else if(driver_enabled.mask != trinamic.driver_enable.mask)
+        status.fault.details.a.mask = (trinamic.driver_enable.mask ^ driver_enabled.mask) & trinamic.driver_enable.mask;
+
+    return status;
 }
 
 bool trinamic_init (void)
@@ -2490,6 +2505,8 @@ bool trinamic_init (void)
 
         limits_enable = hal.limits.enable;
         hal.limits.enable = limitsEnable;
+
+        hal.stepper.stepper_status = trinamic_driver_status;
 
         settings_register(&settings_details);
 
