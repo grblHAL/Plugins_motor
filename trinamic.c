@@ -128,14 +128,15 @@ static struct {
 
 static stepper_enable_ptr stepper_enable = NULL;
 
-TMCI2C_enable_dgr_t dgr_enable = {
+static TMCI2C_enable_dgr_t dgr_enable = {
     .addr.value = TMC_I2CReg_ENABLE
 };
 
-TMCI2C_monitor_status_dgr_t dgr_monitor = {
+static TMCI2C_monitor_status_dgr_t dgr_monitor = {
     .addr.value = TMC_I2CReg_MON_STATE
 };
-#endif
+
+#endif // TRINAMIC_I2C
 
 static void write_debug_report (uint_fast8_t axes);
 
@@ -364,67 +365,54 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
 
     driver_enabled.mask |= bit(motor.axis);
 
-    switch(motor.axis) {
+#if TRINAMIC_I2C
+
+    if(bit_istrue(settings.motor_warning_enable.mask, bit(motor.axis))) switch(motor.axis) {
 
         case X_AXIS:
-          #if TRINAMIC_I2C && TMC_X_MONITOR
             dgr_enable.reg.monitor.x = TMC_X_MONITOR;
-          #endif
             break;
 
         case Y_AXIS:
-          #if TRINAMIC_I2C && TMC_Y_MONITOR
             dgr_enable.reg.monitor.y = TMC_Y_MONITOR;
-          #endif
             break;
 
         case Z_AXIS:
-          #if TRINAMIC_I2C && TMC_Z_MONITOR
             dgr_enable.reg.monitor.z = TMC_Z_MONITOR;
-          #endif
             break;
 
 #ifdef A_AXIS
         case A_AXIS:
-          #if TRINAMIC_I2C && TMC_A_MONITOR
             dgr_enable.reg.monitor.a = TMC_A_MONITOR;
-          #endif
             break;
 #endif
 
 #ifdef B_AXIS
         case B_AXIS:
-
-          #if TRINAMIC_I2C && TMC_B_MONITOR
             dgr_enable.reg.monitor.b = TMC_B_MONITOR;
-          #endif
             break;
 #endif
 
 #ifdef C_AXIS
         case C_AXIS:
-          #if TRINAMIC_I2C && TMC_C_MONITOR
             dgr_enable.reg.monitor.c = TMC_C_MONITOR;
-          #endif
             break;
 #endif
 
 #ifdef U_AXIS
         case U_AXIS:
-          #if TRINAMIC_I2C && TMC_U_MONITOR
             dgr_enable.reg.monitor.u = TMC_U_MONITOR;
-          #endif
             break;
 #endif
 
 #ifdef V_AXIS
         case V_AXIS:
-          #if TRINAMIC_I2C && TMC_V_MONITOR
             dgr_enable.reg.monitor.v = TMC_V_MONITOR;
-          #endif
             break;
 #endif
     }
+
+#endif // TRINAMIC_I2C
 
 #if TRINAMIC_EXTENDED_SETTINGS
     if(cfg_cap.drvconf && custom_drvconf)
@@ -1943,16 +1931,34 @@ static void mcode_execute (uint_fast16_t state, parser_block_t *gc_block)
 
 #if TRINAMIC_I2C
 
-static void stepperEnable (axes_signals_t enable)
+void trinamic_steppers_disable (void *data)
 {
-    enable.mask ^= settings.steppers.enable_invert.mask;
-
-    dgr_enable.reg.enable.mask = enable.mask & driver_enabled.mask;
-
-    tmc_spi_write((trinamic_motor_t){0}, (TMC_spi_datagram_t *)&dgr_enable);
+    tmc_spi_write((trinamic_motor_t){0}, (TMC_spi_datagram_t *)data);
 }
 
-#endif
+static void stepperEnable (axes_signals_t enable, bool hold)
+{
+    static axes_signals_t enabled = {};
+
+    bool disable = enable.mask != (AXES_BITMASK & driver_enabled.mask);
+
+    stepper_enable(enable, hold);
+
+    enable.mask ^= settings.steppers.enable_invert.mask;
+
+    dgr_enable.reg.enable.mask = (enable.mask ^ settings.steppers.enable_invert.mask) & driver_enabled.mask;
+
+    if(disable) { // disabling steppers can be executed in an interrupt context, push to foreground to avoid deadlock
+        enabled.mask = dgr_enable.reg.enable.mask;
+        task_add_immediate(trinamic_steppers_disable, &dgr_enable);
+    } else if(enabled.mask != dgr_enable.reg.enable.mask) {
+        enabled.mask = dgr_enable.reg.enable.mask;
+        task_delete(trinamic_steppers_disable, &dgr_enable);
+        tmc_spi_write((trinamic_motor_t){0}, (TMC_spi_datagram_t *)&dgr_enable);
+    }
+}
+
+#endif // TRINAMIC_I2C
 
 #if TMC_POLL_STALLED
 
