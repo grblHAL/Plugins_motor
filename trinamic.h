@@ -89,6 +89,8 @@
 #define TMC_STEALTHCHOP             0    // 0 = CoolStep, 1 = StealthChop
 #endif
 
+//#define TMC_SR_LATCH  // Experimental
+
 #if TRINAMIC_ENABLE == 2209
 #define TMC_STALLGUARD              4 // Do not change!
 #else
