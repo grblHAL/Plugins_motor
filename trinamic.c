@@ -89,6 +89,11 @@ static axes_signals_t driver_enabled = {0};
 static struct {
     bool active;
     axes_signals_t axes;
+#ifdef TMC_SR_LATCH
+    limit_signals_t limits;
+    limits_get_state_ptr hal_get_limits;
+    limit_interrupt_callback_ptr callback;
+#endif
 #ifdef TMC_HOMING_ACCELERATION
     float accel[N_AXIS];
 #endif
@@ -2001,6 +2006,24 @@ static limit_signals_t trinamic_limits (void)
 
 #endif // TMC_POLL_STALLED
 
+#ifdef TMC_SR_LATCH
+
+static void onLimitsTriggered (limit_signals_t limits)
+{
+    memcpy(&homing.limits, &limits, sizeof(limit_signals_t));
+}
+
+static limit_signals_t getLimits (void)
+{
+    limit_signals_t limits = homing.hal_get_limits();
+
+    limits.bits |= homing.limits.bits;
+
+    return limits;
+}
+
+#endif
+
 // Configure sensorless homing for enabled axes
 static void onHomingRateSet (axes_signals_t axes, float feedrate, homing_mode_t mode)
 {
@@ -2009,6 +2032,10 @@ static void onHomingRateSet (axes_signals_t axes, float feedrate, homing_mode_t 
     axes.mask &= homing.axes.mask;
 
     if(axes.mask) do {
+
+#ifdef TMC_SR_LATCH
+        homing.limits.bits = 0;
+#endif
 
         axis = motor_map[--motor].axis;
 
@@ -2049,12 +2076,20 @@ static void onHomingRateSet (axes_signals_t axes, float feedrate, homing_mode_t 
 // Enable/disable sensorless homing
 static void limitsEnable (bool on, axes_signals_t homing_cycle)
 {
-    if(limits_enable)
-        limits_enable(on, homing_cycle);
-
     homing.axes.mask = (homing_cycle.mask & trinamic.homing_enable.mask) & driver_enabled.mask;
 
     if((homing.active = homing.axes.mask != 0)) {
+
+#ifdef TMC_SR_LATCH
+        limits_enable(true, (axes_signals_t){0});
+
+        homing.hal_get_limits = hal.limits.get_state;
+        hal.limits.get_state = getLimits;
+        homing.callback = hal.limits.interrupt_callback;
+        hal.limits.interrupt_callback = onLimitsTriggered;
+#else
+        limits_enable(on, homing_cycle);
+#endif
 
         grbl.on_homing_rate_set = onHomingRateSet;
 
@@ -2072,6 +2107,22 @@ static void limitsEnable (bool on, axes_signals_t homing_cycle)
     } else {
 
         uint_fast8_t motor = n_motors, axis;
+
+#ifdef TMC_SR_LATCH
+        if(hal.limits.get_state == getLimits) {
+            hal.limits.get_state = homing.hal_get_limits;
+            homing.hal_get_limits = NULL;
+        }
+
+        if(hal.limits.interrupt_callback == onLimitsTriggered) {
+            hal.limits.interrupt_callback = homing.callback;
+            homing.callback = NULL;
+        }
+
+        homing.limits.bits = 0;
+#endif
+
+        limits_enable(on, homing_cycle);
 
         do {
             axis = motor_map[--motor].axis;
