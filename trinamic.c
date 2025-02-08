@@ -703,6 +703,12 @@ static float get_axis_setting_float (setting_id_t setting)
     return value;
 }
 
+static bool is_axis_setting_available (const setting_detail_t *setting, uint_fast16_t offset)
+{
+    return bit_istrue(TRINAMIC_DRIVER_MASK, bit(offset));
+}
+
+
 #if TRINAMIC_EXTENDED_SETTINGS
 
 static status_code_t set_extended (setting_id_t id, uint_fast16_t value)
@@ -966,24 +972,24 @@ static bool is_extended_available (const setting_detail_t *setting, uint_fast16_
 #define AXIS_OPTS { .subgroups = On, .increment = 1 }
 
 static const setting_detail_t trinamic_settings[] = {
-#if TRINAMIC_MIXED_DRIVERS
+#if TRINAMIC_MIXED_DRIVERS && TRINAMIC_DRIVER_MASK == AXES_BITMASK
     { Setting_TrinamicDriver, Group_MotorDriver, "Trinamic driver", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCoreFn, set_driver_enable, get_driver_enable, NULL },
 #endif
-    { Setting_TrinamicHoming, Group_MotorDriver, "Sensorless homing", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCore, &trinamic.homing_enable.mask, NULL, NULL },
-    { Setting_AxisStepperCurrent, Group_Axis0, "-axis motor current", "mA", Format_Integer, "###0", min_current, max_current, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
-    { Setting_AxisMicroSteps, Group_Axis0, "-axis microsteps", "steps", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
+    { Setting_TrinamicHoming, Group_Homing, "Sensorless homing", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCore, &trinamic.homing_enable.mask, NULL, NULL },
+    { Setting_AxisStepperCurrent, Group_Axis0, "-axis motor current", "mA", Format_Integer, "###0", min_current, max_current, Setting_NonCoreFn, set_axis_setting, get_axis_setting, is_axis_setting_available, AXIS_OPTS },
+    { Setting_AxisMicroSteps, Group_Axis0, "-axis microsteps", "steps", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, is_axis_setting_available, AXIS_OPTS },
 #if TMC_STALLGUARD == 4
-    { TMCsetting_HomingSeekSensitivity, Group_Axis0, "-axis StallGuard4 fast threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
+    { TMCsetting_HomingSeekSensitivity, Group_Axis0, "-axis StallGuard4 fast threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, is_axis_setting_available, AXIS_OPTS },
 #else
-    { TMCsetting_HomingSeekSensitivity, Group_Axis0, "-axis StallGuard2 fast threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
+    { TMCsetting_HomingSeekSensitivity, Group_Axis0, "-axis StallGuard2 fast threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, is_axis_setting_available, AXIS_OPTS },
 #endif
 #if TRINAMIC_ENABLE != 2660 || TRINAMIC_DYNAMIC_CURRENT
-    { TMCsetting_HoldCurrentPct, Group_Axis0, "-axis hold current", "%", Format_Int8, "##0", "5", "100", Setting_NonCoreFn, set_axis_setting, get_axis_setting, NULL, AXIS_OPTS },
+    { TMCsetting_HoldCurrentPct, Group_Axis0, "-axis hold current", "%", Format_Int8, "##0", "5", "100", Setting_NonCoreFn, set_axis_setting, get_axis_setting, is_axis_setting_available, AXIS_OPTS },
 #endif
 #if TMC_STALLGUARD == 4
-    { TMCsetting_HomingFeedSensitivity, Group_Axis0, "-axis StallGuard4 slow threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
+    { TMCsetting_HomingFeedSensitivity, Group_Axis0, "-axis StallGuard4 slow threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, is_axis_setting_available, AXIS_OPTS },
 #else
-    { TMCsetting_HomingFeedSensitivity, Group_Axis0, "-axis stallGuard2 slow threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, NULL, AXIS_OPTS },
+    { TMCsetting_HomingFeedSensitivity, Group_Axis0, "-axis stallGuard2 slow threshold", NULL, Format_Decimal, "-##0", "-64", "63", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, is_axis_setting_available, AXIS_OPTS },
 #endif
 #if TRINAMIC_EXTENDED_SETTINGS
     { TMCsetting_Chopconf_TOFF, Group_MotorDriver, "Chopper toff", NULL, Format_Int8, "#0", "1", "15", Setting_NonCoreFn, set_extended, get_extended, is_extended_available },
@@ -1013,9 +1019,7 @@ static const setting_descr_t trinamic_settings_descr[] = {
     { Setting_AxisStepperCurrent, "Motor current in mA (RMS)." },
     { Setting_AxisMicroSteps, "Microsteps per fullstep." },
     { TMCsetting_HomingSeekSensitivity, "StallGuard threshold for fast (seek) homing phase." },
-    { TMCsetting_HoldCurrentPct, "Motor current at standstill as a percentage of full current.\\n"
-                             "NOTE: if grblHAL is configured to disable motors on standstill this setting has no use."
-    },
+    { TMCsetting_HoldCurrentPct, "Motor current at standstill as a percentage of full current.\\n" },
     { TMCsetting_HomingFeedSensitivity, "StallGuard threshold for slow (feed) homing phase." },
 #if TRINAMIC_EXTENDED_SETTINGS
     { TMCsetting_Chopconf_TOFF, "Off time. Duration of slow decay phase as a multiple of system clock periods: NCLK= 24 + (32 x TOFF). This will limit the maximum chopper frequency (0-15).\\n"
@@ -1392,9 +1396,15 @@ static void trinamic_settings_load (void)
         m919_chopconf[--idx].value = cfg_params->chopconf.value;
     } while(idx);
 
-#if !TRINAMIC_MIXED_DRIVERS
-    trinamic.driver_enable.mask = AXES_BITMASK;
+    // Sanity checks
+
+#if TRINAMIC_MIXED_DRIVERS && TRINAMIC_DRIVER_MASK == AXES_BITMASK
+    trinamic.driver_enable.mask &= TRINAMIC_DRIVER_MASK;
+#else
+    trinamic.driver_enable.mask = TRINAMIC_DRIVER_MASK;
 #endif
+    trinamic.homing_enable.mask &= TRINAMIC_DRIVER_MASK;
+    report.sg_status.motormask.mask &= trinamic.driver_enable.mask;
 
     settings_loaded = true;
 }
@@ -2497,7 +2507,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.25");
+    	report_plugin("Trinamic", "0.26");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
