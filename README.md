@@ -42,7 +42,7 @@ Examples:
 `M906 axiswords`
 
 Example:  
-`M122 X700 Y950` - set stepper current for X-motors to 700mA RMS and Y-motors to 950mA.
+`M906 X700 Y950` - set stepper current for X-motors to 700mA RMS and Y-motors to 950mA.
 
 > [!NOTE]
 > Stepper current is not permanently stored.
@@ -211,4 +211,4 @@ Dependencies:
 [Trinamic TMC2130 I2C<>SPI Bridge](https://github.com/terjeio/Trinamic_TMC2130_I2C_SPI_Bridge) \(optional\)
 
 ---
-2024-11-18
+2025-02-20
