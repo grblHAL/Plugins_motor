@@ -77,7 +77,7 @@ typedef void (*mcode_run_callback_ptr)(parser_block_t *gc_block, uint8_t motor, 
 static bool warning = false, settings_loaded = false, silent = false;
 static volatile uint_fast16_t diag1_poll = 0;
 static char sbuf[65]; // string buffer for reports
-static char min_current[5], max_current[5];
+static char min_current[6], max_current[6];
 static uint_fast8_t n_motors = 0;
 static float vsense[2];
 static trinamic_chopconf_t m919_chopconf[TMC_N_MOTORS_MAX];
@@ -976,8 +976,8 @@ static const setting_detail_t trinamic_settings[] = {
     { Setting_TrinamicDriver, Group_MotorDriver, "Trinamic driver", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCoreFn, set_driver_enable, get_driver_enable, NULL },
 #endif
     { Setting_TrinamicHoming, Group_Homing, "Sensorless homing", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCore, &trinamic.homing_enable.mask, NULL, NULL },
-    { Setting_AxisStepperCurrent, Group_Axis0, "-axis motor current", "mA", Format_Integer, "###0", min_current, max_current, Setting_NonCoreFn, set_axis_setting, get_axis_setting, is_axis_setting_available, AXIS_OPTS },
-    { Setting_AxisMicroSteps, Group_Axis0, "-axis microsteps", "steps", Format_Integer, "###0", NULL, NULL, Setting_NonCoreFn, set_axis_setting, get_axis_setting, is_axis_setting_available, AXIS_OPTS },
+    { Setting_AxisStepperCurrent, Group_Axis0, "-axis motor current", "mA", Format_Integer, "####0", min_current, max_current, Setting_NonCoreFn, set_axis_setting, get_axis_setting, is_axis_setting_available, AXIS_OPTS },
+    { Setting_AxisMicroSteps, Group_Axis0, "-axis microsteps", "steps", Format_Integer, "##0", "1", "256", Setting_NonCoreFn, set_axis_setting, get_axis_setting, is_axis_setting_available, AXIS_OPTS },
 #if TMC_STALLGUARD == 4
     { TMCsetting_HomingSeekSensitivity, Group_Axis0, "-axis StallGuard4 fast threshold", NULL, Format_Decimal, "##0", "0", "255", Setting_NonCoreFn, set_axis_setting_float, get_axis_setting_float, is_axis_setting_available, AXIS_OPTS },
 #else
