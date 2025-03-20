@@ -22,11 +22,7 @@
 #ifndef _TRINAMIC_H_
 #define _TRINAMIC_H_
 
-#ifdef ARDUINO
-#include "../driver.h"
-#else
 #include "driver.h"
-#endif
 
 #if TRINAMIC_ENABLE
 
@@ -50,14 +46,14 @@
 #ifndef R_SENSE
 #define R_SENSE 110
 #endif
-#include "../trinamic/tmc2130hal.h"
+#include "trinamic/tmc2130hal.h"
 #endif
 
 #if TRINAMIC_ENABLE == 2209
 #ifndef R_SENSE
 #define R_SENSE 110
 #endif
-#include "../trinamic/tmc2209hal.h"
+#include "trinamic/tmc2209hal.h"
 #endif
 
 #if TRINAMIC_ENABLE == 2660
@@ -67,14 +63,14 @@
 #ifndef TMC_STEALTHCHOP
 #define TMC_STEALTHCHOP 0 // not supported
 #endif
-#include "../trinamic/tmc2660hal.h"
+#include "trinamic/tmc2660hal.h"
 #endif
 
 #if TRINAMIC_ENABLE == 5160
 #ifndef R_SENSE
 #define R_SENSE 75
 #endif
-#include "../trinamic/tmc5160hal.h"
+#include "trinamic/tmc5160hal.h"
 #endif
 
 #ifndef TMC_POLL_STALLED

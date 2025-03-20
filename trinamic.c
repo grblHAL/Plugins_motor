@@ -19,11 +19,7 @@
   along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifdef ARDUINO
-#include "../driver.h"
-#else
 #include "driver.h"
-#endif
 
 #if TRINAMIC_ENABLE
 
@@ -34,14 +30,14 @@
 
 #include "trinamic.h"
 #if TRINAMIC_I2C
-#include "../trinamic/tmc_i2c_interface.h"
+#include "trinamic/tmc_i2c_interface.h"
 #endif
 
-#include "../grbl/nvs_buffer.h"
-#include "../grbl/protocol.h"
-#include "../grbl/state_machine.h"
-#include "../grbl/report.h"
-#include "../grbl/platform.h"
+#include "grbl/nvs_buffer.h"
+#include "grbl/protocol.h"
+#include "grbl/state_machine.h"
+#include "grbl/report.h"
+#include "grbl/platform.h"
 
 #ifndef TRINAMIC_POLL_INTERVAL
 #define TRINAMIC_POLL_INTERVAL 250
