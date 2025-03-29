@@ -1500,7 +1500,7 @@ static void stepperPulseStart (stepper_t *motors)
 {
     hal_stepper_pulse_start(motors);
 
-    if(!report.sg_status.pending && (motors->step_outbits.mask & report.sg_status.motormask.mask))
+    if(!report.sg_status.pending && (motors->step_out.bits & report.sg_status.motormask.bits))
         report.sg_status.pending = task_add_delayed(report_sg_status, NULL, report.sg_status.period);
 }
 
@@ -2503,7 +2503,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.26");
+    	report_plugin("Trinamic", "0.27");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
