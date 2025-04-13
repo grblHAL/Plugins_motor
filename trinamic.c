@@ -307,7 +307,7 @@ static void set_current_for_block (void *block)
     do {
         if(stepper[--motor]) {
             axis = motor_map[motor].axis;
-            if(((motion = ((stepper_t *)block)->exec_segment->next->exec_block->steps[axis] || ((stepper_t *)block)->steps[axis]) ? trinamic.driver[axis].current : reduced_current[motor]) != dynamic_current[motor])
+            if(((motion = ((stepper_t *)block)->exec_segment->next->exec_block->steps.value[axis] || ((stepper_t *)block)->steps.value[axis]) ? trinamic.driver[axis].current : reduced_current[motor]) != dynamic_current[motor])
                 stepper[motor]->set_current(motor, (dynamic_current[motor] = motion ? trinamic.driver[axis].current : reduced_current[motor]), trinamic.driver[axis].hold_current_pct);
         }
     } while(motor);
@@ -2503,7 +2503,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.27");
+    	report_plugin("Trinamic", "0.28");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
