@@ -38,6 +38,7 @@
 #include "grbl/state_machine.h"
 #include "grbl/report.h"
 #include "grbl/platform.h"
+#include "grbl/task.h"
 
 #ifndef TRINAMIC_POLL_INTERVAL
 #define TRINAMIC_POLL_INTERVAL 250
@@ -500,7 +501,7 @@ static bool trinamic_drivers_init (axes_signals_t axes)
     if(status.fault.state) {
 
         if(!silent)
-            protocol_enqueue_foreground_task(report_warning, "Could not communicate with stepper driver!");
+            task_run_on_startup(report_warning, "Could not communicate with stepper driver!");
     //    system_raise_alarm(Alarm_SelftestFailed);
 
         driver_enabled.mask = 0;
@@ -2503,7 +2504,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.28");
+    	report_plugin("Trinamic", "0.29");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
@@ -2531,7 +2532,7 @@ static bool onDriverSetup (settings_t *settings)
     } while(!(setup_ok = trinamic_drivers_setup()) && timeout > 0);
 
     if(!setup_ok)
-        protocol_enqueue_foreground_task(report_warning, "Could not communicate with stepper driver!");
+        task_add_immediate(report_warning, "Could not communicate with stepper driver!");
 
     silent = false;
 
