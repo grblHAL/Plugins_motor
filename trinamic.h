@@ -26,7 +26,11 @@
 
 #if TRINAMIC_ENABLE
 
-#ifdef TRINAMIC_R_SENSE
+#if TRINAMIC_ENABLE == 2240
+#ifdef TRINAMIC_R_REF
+#define R_SENSE TRINAMIC_R_REF
+#endif
+#elif defined(TRINAMIC_R_SENSE)
 #define R_SENSE TRINAMIC_R_SENSE
 #endif
 
@@ -54,6 +58,13 @@
 #define R_SENSE 110
 #endif
 #include "trinamic/tmc2209hal.h"
+#endif
+
+#if TRINAMIC_ENABLE == 2240
+#ifndef R_SENSE
+#define R_SENSE 12 // Kohm -> R_REF
+#endif
+#include "trinamic/tmc2240hal.h"
 #endif
 
 #if TRINAMIC_ENABLE == 2660
@@ -91,7 +102,7 @@
 
 //#define TMC_SR_LATCH  // Experimental
 
-#if TRINAMIC_ENABLE == 2209
+#if TRINAMIC_ENABLE == 2209 || TRINAMIC_ENABLE == 2240
 #define TMC_STALLGUARD              4 // Do not change!
 #else
 #define TMC_STALLGUARD              2 // Do not change!

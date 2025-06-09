@@ -357,20 +357,25 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
     if(driver_if.on_driver_preinit)
         driver_if.on_driver_preinit(motor, &cfg);
 
-    #if TRINAMIC_ENABLE == 2209
+#if TRINAMIC_ENABLE == 2209
         ok = (stepper[motor.id] = TMC2209_AddMotor(motor, cfg.address, cfg.settings->current, cfg.settings->microsteps, cfg.settings->r_sense)) != NULL;
-    #elif TRINAMIC_ENABLE == 2660
+#elif TRINAMIC_ENABLE == 2240
+    #if TRINAMIC_UART_ENABLE
+        ok = (stepper[motor.id] = TMC2240_AddMotor(motor, cfg.address, cfg.settings->current, cfg.settings->microsteps, cfg.settings->r_sense)) != NULL;
+    #else
+        ok = (stepper[motor.id] = TMC2240_AddMotor(motor, cfg.settings->current, cfg.settings->microsteps, cfg.settings->r_sense)) != NULL;
+    #endif
+#elif TRINAMIC_ENABLE == 2660
         uint8_t retries = 25;
         do {
             if(!(ok = (stepper[motor.id] = TMC2660_AddMotor(motor, cfg.settings->current, cfg.settings->microsteps, cfg.settings->r_sense)) != NULL))
                 hal.delay_ms(10, NULL);
         } while(!ok && --retries);
-
-    #elif TRINAMIC_ENABLE == 2130
+#elif TRINAMIC_ENABLE == 2130
         ok = (stepper[motor.id] = TMC2130_AddMotor(motor, cfg.settings->current, cfg.settings->microsteps, cfg.settings->r_sense)) != NULL;
-    #elif TRINAMIC_ENABLE == 5160
+#elif TRINAMIC_ENABLE == 5160
         ok = (stepper[motor.id] = TMC5160_AddMotor(motor, cfg.settings->current, cfg.settings->microsteps, cfg.settings->r_sense)) != NULL;
-    #endif
+#endif
 
     if(!ok) {
 
@@ -1063,6 +1068,8 @@ static void trinamic_settings_get_defaults (bool cap_only)
 
 #if TRINAMIC_ENABLE == 2209
     params = TMC2209_GetConfigDefaults();
+#elif TRINAMIC_ENABLE == 2240
+    params = TMC2240_GetConfigDefaults();
 #elif TRINAMIC_ENABLE == 2660
     params = TMC2660_GetConfigDefaults();
 #elif TRINAMIC_ENABLE == 2130
@@ -2423,6 +2430,15 @@ static void write_debug_report (uint_fast8_t axes)
 
         hal.stream.write("DRIVER STATUS:" ASCII_EOL);
 
+        if(stepper[motor]->get_temp) {
+            sprintf(sbuf, "%-15s", "Temperature");
+            for(motor = 0; motor < n_motors; motor++) {
+                if(debug_report[motor].enabled && stepper[motor]->get_temp)
+                    sprintf(append(sbuf), "%8s", ftoa(stepper[motor]->get_temp(motor), 1));
+            }
+            write_line(sbuf);
+        }
+
         sprintf(sbuf, "%-15s", "stallguard");
         write_line(sbuf);
         sprintf(sbuf, "%-15s", "sg_result");
@@ -2504,7 +2520,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.29");
+    	report_plugin("Trinamic", "0.30");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
