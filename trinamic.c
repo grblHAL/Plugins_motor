@@ -45,7 +45,7 @@
 #endif
 
 #ifndef TRINAMIC_STARTUP_TIMEOUT
-#define TRINAMIC_STARTUP_TIMEOUT 5000 // ms
+#define TRINAMIC_STARTUP_TIMEOUT 500 // ms
 #endif
 
 #define TMCsetting_HomingSeekSensitivity    Setting_AxisExtended0
@@ -973,7 +973,7 @@ static bool is_extended_available (const setting_detail_t *setting, uint_fast16_
 
 #define AXIS_OPTS { .subgroups = On, .increment = 1 }
 
-static const setting_detail_t trinamic_settings[] = {
+PROGMEM static const setting_detail_t trinamic_settings[] = {
 #if TRINAMIC_MIXED_DRIVERS && TRINAMIC_DRIVER_MASK == AXES_BITMASK
     { Setting_TrinamicDriver, Group_MotorDriver, "Trinamic driver", NULL, Format_AxisMask, NULL, NULL, NULL, Setting_NonCoreFn, set_driver_enable, get_driver_enable, NULL },
 #endif
@@ -1011,9 +1011,7 @@ static const setting_detail_t trinamic_settings[] = {
 #endif
 };
 
-#ifndef NO_SETTINGS_DESCRIPTIONS
-
-static const setting_descr_t trinamic_settings_descr[] = {
+PROGMEM static const setting_descr_t trinamic_settings_descr[] = {
 #if TRINAMIC_MIXED_DRIVERS
     { Setting_TrinamicDriver, "Enable SPI or UART controlled Trinamic drivers for axes." },
 #endif
@@ -1054,8 +1052,6 @@ static const setting_descr_t trinamic_settings_descr[] = {
                           "Do NOT change unless you know what you are doing!" },
 #endif
 };
-
-#endif // NO_SETTINGS_DESCRIPTIONS
 
 static void trinamic_settings_save (void)
 {
@@ -2563,15 +2559,13 @@ static stepper_status_t trinamic_driver_status (bool reset)
     return status;
 }
 
-bool trinamic_init (void)
+FLASHMEM bool trinamic_init (void)
 {
     static setting_details_t settings_details = {
         .settings = trinamic_settings,
         .n_settings = sizeof(trinamic_settings) / sizeof(setting_detail_t),
-#ifndef NO_SETTINGS_DESCRIPTIONS
         .descriptions = trinamic_settings_descr,
         .n_descriptions = sizeof(trinamic_settings_descr) / sizeof(setting_descr_t),
-#endif
         .load = trinamic_settings_load,
         .save = trinamic_settings_save,
         .restore = trinamic_settings_restore
