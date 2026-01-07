@@ -1,6 +1,10 @@
 ## Trinamic stepper driver plugin
 
-This plugin adds settings, M-Code extensions and reports for TMC2130, TMC2209, TMC2660 and TMC5160 stepper drivers.
+This plugin adds settings, M-Code extensions and reports for TMC2130, TMC2209, TMC2240, TMC2660 and TMC5160 stepper drivers.
+
+> [!NOTE]
+> Trimamic drivers are not able to respond to configuration commands sent via SPI or UART before motor power is present.
+> The controller will retry configuration for 0.5s on startup, if it fails the drivers can be configured manually with `M122I` after motor power is up.
 
 ### M-codes
 
@@ -211,4 +215,4 @@ Dependencies:
 [Trinamic TMC2130 I2C<>SPI Bridge](https://github.com/terjeio/Trinamic_TMC2130_I2C_SPI_Bridge) \(optional\)
 
 ---
-2025-02-20
+2025-12-23
