@@ -172,21 +172,6 @@ static char *get_axisname (motor_map_t motor)
     return axisname;
 }
 
-static const parameter_words_t wordmap[] = {
-   { .x = On },
-   { .y = On },
-   { .z = On }
-#if N_AXIS > 3
- , { .a = On },
-   { .b = On },
-   { .c = On }
-#endif
-#if N_AXIS > 6
- , { .u = On },
-   { .v = On },
-#endif
-};
-
 #if TRINAMIC_POLL_STATUS
 
 static void trinamic_status_report (void *data)
@@ -1272,6 +1257,22 @@ static void trinamic_settings_restore (void)
                 trinamic.driver[idx].homing_feed_sensitivity = TMC_V_HOMING_FEED_SGT;
                 break;
 #endif
+#ifdef W_AXIS
+            case W_AXIS:
+#if TMC_W_STEALTHCHOP
+                trinamic.driver[idx].mode = TMCMode_StealthChop;
+#else
+                trinamic.driver[idx].mode = TMCMode_CoolStep;
+#endif
+                trinamic.driver_enable.w = TMC_W_ENABLE;
+                trinamic.driver[idx].current = TMC_W_CURRENT;
+                trinamic.driver[idx].hold_current_pct = TMC_W_HOLD_CURRENT_PCT;
+                trinamic.driver[idx].microsteps = TMC_W_MICROSTEPS;
+                trinamic.driver[idx].r_sense = TMC_W_R_SENSE;
+                trinamic.driver[idx].homing_seek_sensitivity = TMC_W_HOMING_SEEK_SGT;
+                trinamic.driver[idx].homing_feed_sensitivity = TMC_W_HOMING_FEED_SGT;
+                break;
+#endif
         }
 
     } while(idx);
@@ -1508,43 +1509,21 @@ static void stepperPulseStart (stepper_t *motors)
         report.sg_status.pending = task_add_delayed(report_sg_status, NULL, report.sg_status.period);
 }
 
-static axes_signals_t mcode_get_axis_mask (parameter_words_t *words)
-{
-    uint_fast8_t idx = N_AXIS;
-    axes_signals_t axes = {0};
-
-    do {
-        idx--;
-        if(words->mask & wordmap[idx].mask) {
-            bit_true(axes.mask, bit(idx));
-            words->mask &= ~wordmap[idx].mask;
-        }
-    } while(idx);
-
-    axes.mask &= driver_enabled.mask;
-
-    return axes;
-}
-
 // Validate M-code axis parameters
 // Sets value to NAN (Not A Number) and returns false if driver not installed
-static bool mcode_validate_axis_values (parser_block_t *gc_block)
+static axes_signals_t mcode_validate_axis_values (parser_block_t *gc_block)
 {
-    uint_fast8_t n_found = 0, n_ok = 0, idx = N_AXIS;
+    axes_signals_t axes = gc_claim_axis_words(gc_block, driver_enabled);
+
+    uint_fast8_t idx = N_AXIS;
 
     do {
         idx--;
-        if(gc_block->words.mask & wordmap[idx].mask) {
-            n_found++;
-            if(bit_istrue(driver_enabled.mask, bit(idx)) && !isnan(gc_block->values.xyz[idx])) {
-                n_ok++;
-                gc_block->words.mask &= ~wordmap[idx].mask;
-            }
-        } else
+        if(bit_istrue(driver_enabled.mask, bit(idx)) && bit_isfalse(axes.mask, bit(idx)))
             gc_block->values.xyz[idx] = NAN;
     } while(idx);
 
-    return n_ok > 0 && n_ok == n_found;
+    return axes;
 }
 
 static inline bool mcode_value_in_range (float value, int32_t min, int32_t max)
@@ -1590,7 +1569,7 @@ static status_code_t mcode_validate (parser_block_t *gc_block)
         case Trinamic_ReadRegister:
         case Trinamic_WriteRegister:
             {
-                axes_signals_t axes = mcode_get_axis_mask(&gc_block->words);
+                axes_signals_t axes = gc_claim_axis_words(gc_block, driver_enabled);
                 if(axes.mask == 0)
                     state = Status_GcodeNoAxisWords;
                 else if(bit_count(axes.mask) > 1)
@@ -1625,12 +1604,12 @@ static status_code_t mcode_validate (parser_block_t *gc_block)
 
             gc_block->words.h = gc_block->words.i = gc_block->words.p = gc_block->words.q = gc_block->words.s = Off;
 
-            mcode_get_axis_mask(&gc_block->words); // clear axis words
+            gc_claim_axis_words(gc_block, driver_enabled); // clear axis words
 //            gc_block->user_mcode_sync = true;
             break;
 
         case Trinamic_ModeToggle:
-            mcode_get_axis_mask(&gc_block->words);
+            gc_claim_axis_words(gc_block, driver_enabled);
             state = mcode_validate_index(gc_block);
             if(gc_block->words.s && !mcode_value_in_range(gc_block->values.s, 0, 1))
                 state = Status_GcodeValueOutOfRange;
@@ -1638,7 +1617,7 @@ static status_code_t mcode_validate (parser_block_t *gc_block)
             break;
 
         case Trinamic_StepperCurrent:
-            if(mcode_validate_axis_values(gc_block)) {
+            if(mcode_validate_axis_values(gc_block).mask) {
                 state = mcode_validate_index(gc_block);
                 gc_block->user_mcode_sync = true;
                 if(!gc_block->words.q)
@@ -1654,7 +1633,7 @@ static status_code_t mcode_validate (parser_block_t *gc_block)
             break;
 
         case Trinamic_HybridThreshold:
-            if(mcode_validate_axis_values(gc_block)) {
+            if(mcode_validate_axis_values(gc_block).mask) {
                 state = mcode_validate_index(gc_block);
                 gc_block->user_mcode_sync = true;
             }
@@ -1662,19 +1641,21 @@ static status_code_t mcode_validate (parser_block_t *gc_block)
 
         case Trinamic_HomingSensitivity:;
 
-            parameter_words_t words = gc_block->words;
+            axes_signals_t axes = gc_claim_axis_words(gc_block, driver_enabled);
 
-            if(mcode_validate_axis_values(gc_block)) {
+            if(axes.mask) {
 
                 uint_fast8_t idx = N_AXIS;
 
-                if((state = mcode_validate_index(gc_block)) == Status_OK) do {
+                state = Status_OK;
+
+                do {
                     idx--;
 #if TMC_STALLGUARD == 4
-                    if((words.mask & wordmap[idx].mask) && !mcode_value_in_range(gc_block->values.xyz[idx], 0, 255))
+                    if(bit_istrue(axes.mask, bit(idx)) && !mcode_value_in_range(gc_block->values.xyz[idx], 0, 255))
                         state = Status_GcodeValueOutOfRange;
 #else
-                    if((words.mask & wordmap[idx].mask) && !mcode_value_in_range(gc_block->values.xyz[idx], -64, 63))
+                    if(bit_istrue(axes.mask, bit(idx)) && !mcode_value_in_range(gc_block->values.xyz[idx], -64, 63))
                         state = Status_GcodeValueOutOfRange;
 #endif
                 } while(idx && state == Status_OK);
@@ -1682,7 +1663,7 @@ static status_code_t mcode_validate (parser_block_t *gc_block)
             break;
 
         case Trinamic_ChopperTiming:
-            mcode_get_axis_mask(&gc_block->words);
+            gc_claim_axis_words(gc_block, driver_enabled);
             state = mcode_validate_index(gc_block);
             if(gc_block->words.o && (gc_block->values.o < 1 || gc_block->values.o > 15)) // toff
                 state = Status_GcodeValueOutOfRange;
@@ -1704,7 +1685,7 @@ static status_code_t mcode_validate (parser_block_t *gc_block)
 static void mcode_run (parser_block_t *gc_block, mcode_run_callback_ptr callback)
 {
     uint_fast8_t idx, axis, motor;
-    axes_signals_t axes = mcode_get_axis_mask(&gc_block->words);
+    axes_signals_t axes = gc_claim_axis_words(gc_block, (axes_signals_t){0});
 
     for(idx = 0; idx < n_motors; idx++) {
         axis = motor_map[idx].axis;
@@ -1825,7 +1806,7 @@ static void mcode_execute (uint_fast16_t state, parser_block_t *gc_block)
                 }
 
                 uint_fast8_t motor = n_motors;
-                axes_signals_t axes = mcode_get_axis_mask(&gc_block->words);
+                axes_signals_t axes = gc_claim_axis_words(gc_block, (axes_signals_t){0});
                 bool write_report = !(gc_block->words.i || gc_block->words.s || gc_block->words.h || gc_block->words.p || gc_block->words.q);
 
                 if(!write_report) {
@@ -2516,7 +2497,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.30");
+    	report_plugin("Trinamic", "0.31");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
