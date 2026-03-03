@@ -3,7 +3,7 @@
 
   Part of grblHAL
 
-  Copyright (c) 2018-2025 Terje Io
+  Copyright (c) 2018-2026 Terje Io
 
   grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -2150,11 +2150,12 @@ static void write_debug_report (uint_fast8_t axes)
         TMC_chopconf_t chopconf;
         TMC_drv_status_t drv_status;
         uint16_t current;
+        float temperature;
         TMC_ihold_irun_t ihold_irun;
     } debug_report_t;
 
     uint_fast8_t motor = n_motors;
-    bool has_gscaler = false;
+    bool has_gscaler = false, has_temp = false;
     debug_report_t debug_report[TMC_N_MOTORS_MAX];
 
     hal.stream.write("[TRINAMIC]" ASCII_EOL);
@@ -2168,6 +2169,8 @@ static void write_debug_report (uint_fast8_t axes)
             debug_report[motor].chopconf = stepper[motor]->get_chopconf(motor);
             debug_report[motor].current = stepper[motor]->get_current(motor, TMCCurrent_Actual);
             debug_report[motor].ihold_irun =  stepper[motor]->get_ihold_irun(motor);
+            if((debug_report[motor].temperature = stepper[motor]->get_temp ? stepper[motor]->get_temp(motor) : -1.0f) != -1.0f)
+                has_temp = true;
 //            TMC5160_ReadRegister(&stepper[motor], (TMC5160_datagram_t *)&stepper[motor]->pwm_scale);
             if(debug_report[motor].drv_status.otpw) {
                 xbar_stepper_state_set(&otpw_triggered, debug_report[motor].axis, debug_report[motor].motor2);
@@ -2407,11 +2410,11 @@ static void write_debug_report (uint_fast8_t axes)
 
         hal.stream.write("DRIVER STATUS:" ASCII_EOL);
 
-        if(stepper[motor]->get_temp) {
+        if(has_temp) {
             sprintf(sbuf, "%-15s", "Temperature");
             for(motor = 0; motor < n_motors; motor++) {
-                if(debug_report[motor].enabled && stepper[motor]->get_temp)
-                    sprintf(append(sbuf), "%8s", ftoa(stepper[motor]->get_temp(motor), 1));
+                if(debug_report[motor].enabled)
+                    sprintf(append(sbuf), "%8s", ftoa(debug_report[motor].temperature, 1));
             }
             write_line(sbuf);
         }
@@ -2497,7 +2500,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.31");
+    	report_plugin("Trinamic", "0.32");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
