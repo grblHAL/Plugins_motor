@@ -2016,7 +2016,7 @@ static limit_signals_t getLimits (void)
 #endif
 
 // Configure sensorless homing for enabled axes
-static void onHomingRateSet (axes_signals_t axes, float feedrate, homing_mode_t mode)
+static void onHomingRateSet (axes_signals_t axes, coord_data_t *feedrate, homing_mode_t mode)
 {
     uint_fast8_t motor = n_motors, axis;
 
@@ -2037,7 +2037,7 @@ static void onHomingRateSet (axes_signals_t axes, float feedrate, homing_mode_t 
                 homing.accel[axis] = settings.axis[axis].acceleration / (60.0f * 60.0f);
                 settings_override_acceleration(axis, min(TMC_HOMING_ACCELERATION, homing.accel[axis]));
 #endif
-                stepper[motor]->stallguard_enable(motor, feedrate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_seek_sensitivity);
+                stepper[motor]->stallguard_enable(motor, feedrate->values[axis], settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_seek_sensitivity);
                 break;
 
             case HomingMode_Locate:
@@ -2045,7 +2045,7 @@ static void onHomingRateSet (axes_signals_t axes, float feedrate, homing_mode_t 
                 homing.accel[axis] = settings.axis[axis].acceleration / (60.0f * 60.0f);
                 settings_override_acceleration(axis, min(TMC_HOMING_ACCELERATION, homing.accel[axis]));
 #endif
-                stepper[motor]->stallguard_enable(motor, feedrate, settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_feed_sensitivity);
+                stepper[motor]->stallguard_enable(motor, feedrate->values[axis], settings.axis[axis].steps_per_mm, trinamic.driver[axis].homing_feed_sensitivity);
                 break;
 
             default: // HomingMode_Pulloff
@@ -2500,7 +2500,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);
 
     if(!newopt)
-    	report_plugin("Trinamic", "0.32");
+        report_plugin("Trinamic", "0.33");
     else if(driver_enabled.mask) {
         hal.stream.write(",TMC=");
         hal.stream.write(uitoa(driver_enabled.mask));
