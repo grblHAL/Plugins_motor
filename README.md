@@ -16,10 +16,10 @@ Some Marlin-style M-codes are supported: [M122](https://marlinfw.org/docs/gcode/
 
 `M122 axisletters <H-> <S-> <Q-> <I>`
 
-* `H` - 0 = SFILT off, 1 = SFILT on \(TMC2130\) only.
+* `H` - 0 = SFILT off, 1 = SFILT on \(not available for TMC2209\) only.
 * `I` - reinitialize driver.
 * `S` - 0 = disable StallGuard and live output of sg-value, 1 = enable StallGuard and live output. 
-* `Q` - not yet enabled.
+* `Q` - not yet implemented.
 
 Examples:  
 `M122` - output debug info for all enabled drivers. This is a plain text report, do not issue from a sender!  
@@ -215,4 +215,4 @@ Dependencies:
 [Trinamic TMC2130 I2C<>SPI Bridge](https://github.com/terjeio/Trinamic_TMC2130_I2C_SPI_Bridge) \(optional\)
 
 ---
-2025-12-23
+2026-04-16
