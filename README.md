@@ -16,7 +16,7 @@ Some Marlin-style M-codes are supported: [M122](https://marlinfw.org/docs/gcode/
 
 `M122 axisletters <H-> <S-> <Q-> <I>`
 
-* `H` - 0 = SFILT off, 1 = SFILT on \(not available for TMC2209\) only.
+* `H` - 0 = SFILT off, 1 = SFILT on \(not available for TMC2209\).
 * `I` - reinitialize driver.
 * `S` - 0 = disable StallGuard and live output of sg-value, 1 = enable StallGuard and live output. 
 * `Q` - not yet implemented.
