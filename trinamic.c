@@ -1819,7 +1819,7 @@ static void mcode_execute (uint_fast16_t state, parser_block_t *gc_block)
                         trinamic_drivers_init(driver_enabled);
 
                     if(gc_block->words.h) {
-                        report.sfilt = sfilt;
+                        report.sfilt = gc_block->values.h != 0.0f;
                         motor = n_motors;
                         do {
                             if(stepper[--motor])
