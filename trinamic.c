@@ -82,7 +82,7 @@ static const tmchal_t *stepper[TMC_N_MOTORS_MAX];
 static motor_map_t *motor_map;
 static stepper_state_t otpw_triggered = {};
 static stepper_status_t status = {};
-static axes_signals_t driver_enabled = {0};
+static axes_signals_t driver_enabled = {0}, sfilt_enable = {0};
 static struct {
     bool active;
     bool saved_sfilt;
@@ -128,7 +128,6 @@ static stepper_pulse_start_ptr stepper_block_start = NULL;
 
 static struct {
     bool raw;
-    bool sfilt;
     struct {
         bool enable;
         bool pending;
@@ -138,7 +137,7 @@ static struct {
         axes_signals_t motormask;
         uint16_t period;
     } sg_status;
-} report = { .sfilt = true, .sg_status.period = 50, .sg_status.motormask.x = On };
+} report = { .sg_status.period = 50, .sg_status.motormask.x = On };
 
 #if TRINAMIC_I2C
 
@@ -427,8 +426,10 @@ static bool trinamic_driver_config (motor_map_t motor, uint8_t seq)
     if(cfg_cap.drvconf && custom_drvconf)
         stepper[motor.id]->write_register(motor.id, stepper[motor.id]->drvconf_address, cfg_params->drvconf);
 #endif
-
-    stepper[motor.id]->sg_filter(motor.id, 1);
+#if TMC_SFILT_ENABLE
+    bit_true(sfilt_enable.mask, bit(motor.axis));
+#endif
+    stepper[motor.id]->sg_filter(motor.id, bit_istrue(sfilt_enable.mask, bit(motor.axis)));
     stepper[motor.id]->coolconf(motor.id, cfg_params->coolconf);
     stepper[motor.id]->chopper_timing(motor.id, cfg_params->chopconf);
 
@@ -1753,7 +1754,7 @@ static void m914_homing_sensitivity (parser_block_t *gc_block, uint8_t motor, bo
 
     if(!isnan(gc_block->values.xyz[axis])) {
         trinamic.driver[axis].homing_seek_sensitivity = (int16_t)gc_block->values.xyz[axis];
-        stepper[motor]->sg_filter(motor, report.sfilt);
+        stepper[motor]->sg_filter(motor, bit_istrue(sfilt_enable.mask, bit(axis)));
         stepper[motor]->sg_stall_value(motor, trinamic.driver[axis].homing_seek_sensitivity);
     }
 }
@@ -1806,24 +1807,33 @@ static void mcode_execute (uint_fast16_t state, parser_block_t *gc_block)
                     return;
                 }
 
-                uint_fast8_t motor = n_motors;
                 axes_signals_t axes = gc_claim_axis_words(gc_block, (axes_signals_t){0});
                 bool write_report = !(gc_block->words.i || gc_block->words.s || gc_block->words.h || gc_block->words.p || gc_block->words.q);
 
                 if(!write_report) {
 
                     bool sg_report = report.sg_status.enable;
-                    uint_fast16_t axis = axes.mask ? ffs(axes.mask) - 1 : report.sg_status.axis;
+                    uint_fast16_t motor, axis = axes.mask ? ffs(axes.mask) - 1 : report.sg_status.axis;
 
                     if(gc_block->words.i)
                         trinamic_drivers_init(driver_enabled);
 
                     if(gc_block->words.h) {
-                        report.sfilt = sfilt;
+                        if(gc_block->values.h != 0.0f) {
+                            if(axes.mask)
+                                sfilt_enable.mask |= axes.mask;
+                            else
+                                sfilt_enable.mask = driver_enabled.mask;
+                        } else {
+                            if(axes.mask)
+                                sfilt_enable.mask &= ~axes.mask;
+                            else
+                                sfilt_enable.mask = 0;
+                        }
                         motor = n_motors;
                         do {
                             if(stepper[--motor])
-                                stepper[motor]->sg_filter(motor, report.sfilt);
+                                stepper[motor]->sg_filter(motor, bit_istrue(sfilt_enable.mask, bit(motor_map[motor].axis)));
                         } while(motor);
                     }
 
@@ -1836,6 +1846,7 @@ static void mcode_execute (uint_fast16_t state, parser_block_t *gc_block)
                     if(gc_block->words.s)
                         report.sg_status.enable = gc_block->values.s != 0.0f;
 
+                    motor = n_motors;
                     if(axis != report.sg_status.axis || (sg_report && !report.sg_status.enable)) do {
                         motor--;
                         if(stepper[motor] && motor_map[motor].axis == report.sg_status.axis) {
@@ -1862,7 +1873,6 @@ static void mcode_execute (uint_fast16_t state, parser_block_t *gc_block)
                             if(motor_map[--motor].axis == report.sg_status.axis) {
                                 report.sg_status.motor[report.sg_status.motors++] = motor;
                                 stepper[motor]->stallguard_enable(motor, settings.axis[axis].homing_feed_rate, settings.axis[axis].steps_per_mm, trinamic.driver[motor_map[motor].axis].homing_seek_sensitivity);
-                                stepper[motor]->sg_filter(motor, report.sfilt);
                                 if(stepper[motor]->set_thigh_raw) // TODO: TMC2209 and TMC2260 do not have this...
                                     stepper[motor]->set_thigh_raw(motor, 0);
                             }
@@ -2091,15 +2101,15 @@ static void limitsEnable (bool on, axes_signals_t homing_cycle)
 
         grbl.on_homing_rate_set = onHomingRateSet;
 
-        homing.saved_sfilt = report.sfilt;
-        if(homing.saved_sfilt) {
-            uint_fast8_t m = n_motors;
+#if !TMC_SFILT_ENABLE
+        if(sfilt_enable.mask) {
+            uint_fast8_t motor = n_motors;
             do {
-                uint_fast8_t ax = motor_map[--m].axis;
-                if(bit_istrue(homing.axes.mask, bit(ax)))
-                    stepper[m]->sg_filter(m, false);
-            } while(m);
+                if(bit_istrue(homing.axes.mask, bit(motor_map[--motor].axis)))
+                    stepper[motor]->sg_filter(motor, false);
+            } while(motor);
         }
+#endif
 #if TRINAMIC_DYNAMIC_CURRENT
         set_current_for_homing();
 #endif
@@ -2138,7 +2148,7 @@ static void limitsEnable (bool on, axes_signals_t homing_cycle)
                     stepper[motor]->stealthchop_enable(motor);
                 else if(trinamic.driver[axis].mode == TMCMode_CoolStep)
                     stepper[motor]->coolstep_enable(motor);
-                stepper[motor]->sg_filter(motor, homing.saved_sfilt);
+                stepper[motor]->sg_filter(motor, bit_istrue(sfilt_enable.mask, bit(axis)));
 #ifdef TMC_HOMING_ACCELERATION
                 if(homing.accel[axis] > 0.0f) {
                     settings_override_acceleration(axis, homing.accel[axis]);

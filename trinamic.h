@@ -3,7 +3,7 @@
 
   Part of grblHAL
 
-  Copyright (c) 2018-2025 Terje Io
+  Copyright (c) 2018-2026 Terje Io
 
   grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -98,6 +98,10 @@
 
 #ifndef TMC_STEALTHCHOP
 #define TMC_STEALTHCHOP             0    // 0 = CoolStep, 1 = StealthChop
+#endif
+
+#ifndef TMC_SFILT_ENABLE
+#define TMC_SFILT_ENABLE            0    // 0 = disable, 1 = enable
 #endif
 
 //#define TMC_SR_LATCH  // Experimental
