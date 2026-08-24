@@ -105,7 +105,7 @@ static nvs_address_t nvs_address;
 static on_realtime_report_ptr on_realtime_report;
 static on_report_options_ptr on_report_options;
 static driver_setup_ptr driver_setup;
-static settings_changed_ptr settings_changed;
+static settings_changed_ptr on_settings_changed;
 static user_mcode_ptrs_t user_mcode;
 
 static trinamic_driver_if_t driver_if = {0};
@@ -1419,7 +1419,7 @@ static void onSettingsChanged (settings_t *settings, settings_changed_flags_t ch
 
     uint_fast8_t idx = N_AXIS;
 
-    settings_changed(settings, changed);
+    on_settings_changed(settings, changed);
 
     if(init_ok) {
         do {
@@ -2618,8 +2618,8 @@ FLASHMEM bool trinamic_init (void)
         driver_setup = hal.driver_setup;
         hal.driver_setup = onDriverSetup;
 
-        settings_changed = hal.settings_changed;
-        hal.settings_changed = onSettingsChanged;
+        on_settings_changed = grbl.on_settings_changed;
+        grbl.on_settings_changed = onSettingsChanged;
 
         limits_enable = hal.limits.enable;
         hal.limits.enable = limitsEnable;
